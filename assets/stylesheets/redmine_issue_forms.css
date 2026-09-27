@@ -97,16 +97,21 @@
   padding-right: 2em;
 }
 
+/* Core gives submit buttons a fixed 28px height, which would win over
+   top/bottom and stick out below the 24px input; height: auto lets the
+   offsets decide. 2px: the input's 1px margin plus its 1px border, so the
+   hover background stays inside the border. */
 .wiki .issue-form-field button.issue-form-ok {
   position: absolute;
-  top: 1px;
-  right: 1px;
-  bottom: 1px;
+  top: 2px;
+  right: 2px;
+  bottom: 2px;
+  height: auto;
   width: 1.9em;
   margin: 0;
   padding: 0;
   border: 0;
-  border-radius: 0 3px 3px 0;
+  border-radius: 0 2px 2px 0;
   background: transparent;
   box-shadow: none;
   cursor: pointer;

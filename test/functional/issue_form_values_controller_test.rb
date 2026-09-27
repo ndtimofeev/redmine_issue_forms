@@ -80,7 +80,31 @@ class IssueFormValuesControllerTest < Redmine::ControllerTest
     assert_operator warning.bytesize, :<=, IssueFormValuesController::FLASH_BYTES
     assert_includes warning, '...'
     assert_includes warning, '&lt;ё&gt;'
-    assert_not_includes warning, '&lt;ё&gt...' # never an entity cut in half
+    assert_no_match(/&(?![a-z]+;|#\d+;)/, warning) # never an entity cut in half
+  end
+
+  test 'long table and column names are shortened without losing the row number' do
+    User.find(2).update!(language: 'ru')
+    table = 'Приёмка партии товара'
+    column = 'Замечания и комментарии проверяющего'
+    rows = (0...5).map { |i| "| #{i} |  |" }.join("\n")
+    @issue.update_columns(description: "*#{table}*\n\n|_. Позиция |_. #{column} |\n#{rows}\n")
+    add_note(@issue, "#{table} : #{column} : 1 : чужое\n#{table} : #{column} : 3 : чужое")
+    post_values(Keys.cell_id(table, column, 1) => 'трещина', Keys.cell_id(table, column, 3) => 'скол',
+                Keys.cell_id(table, column, 4) => 'ок')
+    assert_equal "#{table} : #{column} : 4 : ок", Journal.order(:id).last.notes
+    assert_includes flash[:warning], ' : 1 (вы ввели «трещина»)'
+    assert_includes flash[:warning], ' : 3 (вы ввели «скол»)'
+  end
+
+  test 'a short warning leaves the room it does not need to the others' do
+    add_note(@issue, 'Date : theirs')
+    stale = (1..8).to_h { |i| ["ifv-#{format('%016x', i)}", "value number #{i} #{'x' * 40}"] }
+    post_values(stale.merge(Keys.field_id('Date') => 'mine'))
+    warning = flash[:warning]
+    assert_includes warning, 'Date (you typed'
+    (1..8).each { |i| assert_includes warning, "value number #{i} " }
+    assert_operator warning.bytesize, :<=, IssueFormValuesController::FLASH_BYTES
   end
 
   test 'a cleared value that could not be saved is reported as a clear' do

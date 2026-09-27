@@ -54,8 +54,7 @@ module RedmineIssueForms
       return false if template.empty?
 
       texts = [journal.notes_before_last_save, journal.notes_in_database, journal.notes].compact.uniq
-      names = nil # looked up once for all the texts, and only if needed
-      former_names = -> { names ||= Form.former_names_for(issue) }
+      former_names = ->(names) { Form.former_names_for(issue, names) }
       texts.any? { |text| Form.new(template, [[journal.id.to_i, text.to_s]], former_names: former_names).reads_any? }
     end
   end

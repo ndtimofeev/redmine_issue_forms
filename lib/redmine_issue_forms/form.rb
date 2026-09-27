@@ -35,9 +35,21 @@ module RedmineIssueForms
     # line wins and an empty value removes it.
     Orphan = Struct.new(:line, :journal_id, :reason)
 
-    # How many earlier versions of a description are looked at for names
-    # that were renamed or removed (see .former_names_for).
-    MAX_FORMER_TEMPLATES = 20
+    # The last line for a place of the second kind, before the history was
+    # asked about its name (see #former_candidates). +sequence+ orders it
+    # among all the lines read.
+    Candidate = Struct.new(:name, :value, :line, :journal_id, :reason, :sequence)
+
+    # How many different names of the second kind the history is asked
+    # about, the most recently used ones. Each costs a word search per
+    # earlier version of the description; comments full of made-up
+    # "Word : text" lines shouldn't make every look at the issue slow.
+    MAX_FORMER_NAME_CANDIDATES = 50
+
+    # Earlier versions of a description are loaded this many at a time, so
+    # a long history is never all in memory at once and the search can
+    # stop as soon as every name it looks for was found.
+    FORMER_BATCH = 20
 
     # Something a value can be written to. +kind+ is :field, :cell (an
     # existing row) or :new_cell (a cell of the blank row that adds a new
@@ -59,27 +71,55 @@ module RedmineIssueForms
     # table of that name exists.
     CELL_ROW = /\A\d+\z/
 
+    # The Form the controller saves against. Without former names: they
+    # only matter for #orphans and #reads_any?, which saving never asks.
     def self.for_issue(issue)
-      new(Template.parse(issue.description), notes_for(issue), former_names: -> { former_names_for(issue) })
+      new(Template.parse(issue.description), notes_for(issue))
     end
 
-    # Normalized keys and table names of the earlier versions of +issue+'s
-    # description, from its history (the "description" changes of its
-    # journals). One query and a parse per version; Form only asks for
-    # them when a comment line names something the template doesn't have.
-    def self.former_names_for(issue)
-      return Set.new if issue.new_record?
+    # Which of +names+ (normalized keys and table names that comment lines
+    # use but the current description doesn't have) an earlier version of
+    # +issue+'s description had, going by its history: the "description"
+    # changes of its journals, newest first.
+    #
+    # Every version is looked at - a rename is found however long ago it
+    # happened - but cheaply: versions are loaded FORMER_BATCH at a time,
+    # only a version that contains every word of a name is parsed (see
+    # .may_contain_name?), and the search stops once all names are found.
+    # Ordinary prose such as "Remark : missing part" is the common case of
+    # a name no version has, and it costs a word search per version.
+    def self.former_names_for(issue, names)
+      wanted = names.to_set
+      found = Set.new
+      return found if issue.new_record? || wanted.empty?
 
-      descriptions = JournalDetail.joins(:journal)
-                                  .where(journals: { journalized_type: 'Issue', journalized_id: issue.id })
-                                  .where(property: 'attr', prop_key: 'description')
-                                  .order(id: :desc).limit(MAX_FORMER_TEMPLATES)
-                                  .pluck(:old_value)
-      descriptions.each_with_object(Set.new) do |description, names|
-        former = Template.parse(description)
-        former.valid_fields.each { |field| names << field.normalized_key }
-        former.form_tables.each { |table| names << table.normalized_name }
+      ids = JournalDetail.joins(:journal)
+                         .where(journals: { journalized_type: 'Issue', journalized_id: issue.id })
+                         .where(property: 'attr', prop_key: 'description')
+                         .order(id: :desc).pluck(:id)
+      ids.each_slice(FORMER_BATCH) do |batch|
+        descriptions = JournalDetail.where(id: batch).order(id: :desc).pluck(:old_value).compact.uniq
+        descriptions.each do |description|
+          pending = wanted - found
+          texts = Template.searchable_texts(description)
+          next unless pending.any? { |name| may_contain_name?(texts, name) }
+
+          former = Template.parse(description)
+          former.valid_fields.each { |field| found << field.normalized_key if pending.include?(field.normalized_key) }
+          former.form_tables.each { |table| found << table.normalized_name if pending.include?(table.normalized_name) }
+          return found if found.size == wanted.size
+        end
       end
+      found
+    end
+
+    # Whether a description whose Template.searchable_texts are +texts+
+    # can possibly have the key or table name +name+: a name is made of the
+    # words of its labels (joined by "_" for nested items), so every one
+    # of them must appear in it. A quick test that only rules versions
+    # out; Template.parse decides.
+    def self.may_contain_name?(texts, name)
+      name.split(/[_ ]/).all? { |word| word.empty? || texts.any? { |text| text.include?(word) } }
     end
 
     # [[journal_id, notes], ...] of the issue's public, non-empty notes,
@@ -97,16 +137,21 @@ module RedmineIssueForms
     attr_reader :template
 
     # +notes+: [[journal_id, text], ...] ordered oldest first.
-    # +former_names+: a callable returning the normalized names that
-    # earlier versions of the template had (see .former_names_for); called
-    # at most once, and only if a line needs it.
+    # +former_names+: a callable that takes a set of normalized names and
+    # returns those an earlier version of the template had (see
+    # .former_names_for). Only #orphans and #reads_any? need it, so it is
+    # called at most once, when one of them is first asked and a comment
+    # line names something the template doesn't have - never while the
+    # values are read, which every rendering of the description does.
     def initialize(template, notes, former_names: nil)
       @template = template
       @former_names_source = former_names
       @field_values = {}
       @cell_values = {}
-      @orphans = {} # place => Orphan, last one wins
+      @orphans = {} # place => [Orphan, sequence], last one wins
+      @candidates = {} # place => Candidate, last one wins
       @lines_read = 0
+      @sequence = 0
       notes.each do |journal_id, text|
         text.to_s.each_line do |line|
           line = line.strip
@@ -117,15 +162,18 @@ module RedmineIssueForms
 
     # Whether any line of the notes was a value for this form, or an orphan.
     def reads_any?
-      @lines_read.positive?
+      @lines_read.positive? || former_candidates.any?
     end
 
     # Comment lines that look like values but have no place in the form,
     # in the order they were written.
     def orphans
-      @orphans_sorted ||= @orphans.values.each_with_index
-                                  .sort_by { |orphan, index| [orphan.journal_id, index] }
-                                  .map(&:first)
+      @orphans_sorted ||= begin
+        former = former_candidates.reject { |candidate| candidate.value.strip.empty? }.map do |candidate|
+          [Orphan.new(candidate.line, candidate.journal_id, candidate.reason), candidate.sequence]
+        end
+        (@orphans.values + former).sort_by(&:last).map(&:first)
+      end
     end
 
     def field_value(field)
@@ -250,13 +298,20 @@ module RedmineIssueForms
       !Template::QUOTE_LINE.match?(line) && line.split(SEPARATOR, 2).size == 2
     end
 
-    def former_name?(name)
-      @former_names ||= @former_names_source ? @former_names_source.call.to_set : Set.new
-      @former_names.include?(Keys.normalize(name))
+    # The candidates whose name an earlier template had: the last line of
+    # each such place, clearing ones ("Old :") included.
+    def former_candidates
+      @former_candidates ||= begin
+        names = @candidates.each_value.map(&:name).uniq.last(MAX_FORMER_NAME_CANDIDATES).to_set
+        former = names.empty? || @former_names_source.nil? ? Set.new : @former_names_source.call(names).to_set
+        @candidates.each_value.select { |candidate| former.include?(candidate.name) }
+      end
     end
 
     def apply_line(line, journal_id)
       return unless value_line?(line)
+
+      @sequence += 1
 
       parts = line.split(SEPARATOR, 4)
 
@@ -271,14 +326,22 @@ module RedmineIssueForms
       key, value = line.split(SEPARATOR, 2)
       if (field = template.field_for_key(key))
         store(@field_values, field.normalized_key, value.strip, journal_id)
-      elsif parts.size == 4 && parts[2].match?(CELL_ROW) && former_name?(parts[0])
-        # A cell of a table the template had before it was renamed or
-        # removed.
+      elsif parts.size == 4 && parts[2].match?(CELL_ROW)
+        # Maybe a cell of a table the template had before it was renamed or
+        # removed: the history decides, if it's ever asked.
         address = [:cell, *parts[0..2].map { |part| Keys.normalize(part) }]
-        add_orphan(address, parts[3], line, journal_id, :unknown_table)
-      elsif former_name?(key)
-        add_orphan([:key, Keys.normalize(key)], value, line, journal_id, :unknown_key)
+        add_candidate(address, address[1], parts[3], line, journal_id, :unknown_table)
+      else
+        # Maybe a value of a key an earlier template had - or just prose.
+        name = Keys.normalize(key)
+        add_candidate([:key, name], name, value, line, journal_id, :unknown_key)
       end
+    end
+
+    # Like #add_orphan, the last line of a place replaces the earlier ones.
+    def add_candidate(place, name, value, line, journal_id, reason)
+      @candidates.delete(place)
+      @candidates[place] = Candidate.new(name, value, line, journal_id, reason, @sequence)
     end
 
     def apply_table_line(table, parts, line, journal_id)
@@ -290,7 +353,7 @@ module RedmineIssueForms
         # "Table : Column : something" that isn't a cell address - most
         # likely a typo in a hand-written comment. Each such line is its
         # own orphan: there is no place it could be replaced at.
-        add_orphan([:line, @lines_read], line, line, journal_id, :bad_cell_address)
+        add_orphan([:line, @sequence], line, line, journal_id, :bad_cell_address)
         return
       end
 
@@ -323,7 +386,7 @@ module RedmineIssueForms
     def add_orphan(place, value, line, journal_id, reason)
       @lines_read += 1
       @orphans.delete(place)
-      @orphans[place] = Orphan.new(line, journal_id, reason) unless value.strip.empty?
+      @orphans[place] = [Orphan.new(line, journal_id, reason), @sequence] unless value.strip.empty?
     end
 
     def store(hash, key, value, journal_id)

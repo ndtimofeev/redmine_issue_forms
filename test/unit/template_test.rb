@@ -211,7 +211,9 @@ class RedmineIssueForms::TemplateTest < ActiveSupport::TestCase
       "* Дата: #{'{ж} ' * 50_000}\n",                 # character offsets on a Cyrillic line
       "* A%#{'()' * 50_000}: {}\n",                    # %...% styling without regex memoization
       "* A{#{'a:' * 25_000}\n",
-      "* Дата: #{'<code>ж ' * 20_000}{}\n"            # inline code regions
+      "* Дата: #{'<code>ж ' * 20_000}{}\n",           # inline code regions
+      "* A: {} #{'<pre' * 25_000}\n",                 # an opening tag that never ends (Ruby 3.1)
+      "#{'<pre' * 25_000}\n"                          # the same outside a list
     ].each do |text|
       started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
       parse(text)
@@ -235,9 +237,20 @@ class RedmineIssueForms::TemplateTest < ActiveSupport::TestCase
 
   test 'placeholders inside inline pre, code, kbd and notextile are left alone' do
     assert_empty parse("* Ключ задаётся так: <notextile>{Ключ}</notextile>\n").fields
-    template = parse("* A: <pre>{}</pre> {} <CODE>{x}</code>\n")
+    template = parse("* A: <pre>{}</pre> {} <code class=\"ruby\">{x}</code>\n")
     assert_equal ['A'], template.fields.map(&:key)
     assert template.fields.first.valid?
+  end
+
+  test 'uppercase tags are text, as in RedCloth3' do
+    assert_equal %w[Serial Date], parse("* Serial: <CODE>{Serial}</CODE>\n* Date: {}\n").fields.map(&:key)
+    assert_equal %w[A B], parse("* A: {}\n<PRE>\n* B: {}\n</PRE>\n").fields.map(&:key)
+    # A lowercase block is closed only by a lowercase tag.
+    assert_empty parse("<pre>\n* B: {}\n</PRE>\n\n* C: {}\n").fields
+  end
+
+  test 'an opening tag runs to the next ">", as in RedCloth3' do
+    assert_empty parse("<pre title=\"a<b\">\n* B: {}\n</pre>\n").fields
   end
 
   test 'comparison signs in labels are text, not tags' do

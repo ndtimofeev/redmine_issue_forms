@@ -38,9 +38,9 @@ module RedmineIssueForms
     # every button, and core's double-submit guard
     # (addFormObserversForDoubleSubmit, bound to this same form), which
     # would take the cancelled submit for a first one and block every
-    # later one. The inline handler runs before both.
-    # handlers when the person chooses to stay. Without JavaScript the
-    # attribute does nothing.
+    # later one. The inline handler runs before both, and stops them only
+    # when the person chooses to stay. Without JavaScript the attribute
+    # does nothing.
     UNSAVED_TEXT_GUARD =
       "if (window.warnLeavingUnsavedMessage && window.jQuery && " \
       "$('textarea').filter(function() { return $(this).data('changed'); }).length > 0 && " \
@@ -63,7 +63,9 @@ module RedmineIssueForms
       template = Template.parse(@issue.description)
       return nil if template.empty?
 
-      @form = Form.new(template, Form.notes_for(@issue), former_names: -> { Form.former_names_for(@issue) })
+      # The history is only searched if the orphans are shown (see
+      # #notes_block), so a read-only rendering never pays for it.
+      @form = Form.new(template, Form.notes_for(@issue), former_names: ->(names) { Form.former_names_for(@issue, names) })
       html = substitute_markers(yield(build_source).to_str)
       html = html.html_safe # rubocop:disable Rails/OutputSafety - every inserted piece is built with escaping helpers below
 

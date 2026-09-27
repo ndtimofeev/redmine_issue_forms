@@ -51,8 +51,8 @@ separate permission.
 * `{Key}` gives the field an explicit key (`Resp`). Needed when an item
   has more than one field, and handy for keeping keys short.
 * Placeholders outside list items, inside `<pre>`, `<code>`, `<kbd>` and
-  `<notextile>` (on one line or across lines) and in quotes (`> ...`) are
-  left alone, and so are the double braces of `{{macros}}`. Redmine's
+  `<notextile>` (on one line or across lines; lowercase, as Redmine shows
+  `<CODE>` as text) and in quotes (`> ...`) are left alone, and so are the double braces of `{{macros}}`. Redmine's
   Textile has no `bc.` or `notextile.` blocks: a list after them is a
   list, and its placeholders are fields.
 * A list, like in Textile, goes on until a blank line or a quote: a line
@@ -140,7 +140,7 @@ People who can fill the form also see, under it, mistakes in the template
 form*, comment lines that can't be placed: a cell that doesn't exist in a
 table, or a value whose field or table an earlier version of the
 description had (a label was renamed after the form was filled; the
-issue history tells). A key the form never had is taken for ordinary
+issue history tells, however long ago it was). A key the form never had is taken for ordinary
 prose and not listed. As with values, the latest line for a place wins,
 and `Key :` removes it from the list.
 
@@ -157,6 +157,23 @@ and `Key :` removes it from the list.
 * Values are plain single-line text.
 * The plain-text part of e-mail notifications shows the description as
   written, with its `{}`; the HTML part shows the values.
+
+## Upgrading
+
+The first versions (up to commit `50c6428`, September 2026) made some keys
+differently. A value saved under such a key is not shown any more; enter
+it again (the old comment stays in the issue history):
+
+* `Key: value` without a space before the colon is ordinary text, not a
+  value.
+* A line of text under a list item belongs to that item, so the items
+  after it keep their parents' labels in their keys.
+* Text in angle brackets is part of a label: `* Gap <0.5 mm (spec >0.1): {}`
+  was the key `Gap 0.1)`, now it is `Gap <0.5 mm (spec >0.1)`.
+* A quote (`> ...`) ends a list: items after it don't get the labels of
+  the items above it.
+* A placeholder in `<code>`, `<pre>`, `<kbd>` or `<notextile>` on one line
+  is not a field.
 
 ## Development
 

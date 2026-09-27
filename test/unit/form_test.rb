@@ -62,7 +62,7 @@ class RedmineIssueForms::FormTest < ActiveSupport::TestCase
       "Checked.\nRatio 1 : 2 : 3 : 4", # never a table
       'Items : Qty : 0 : 5'           # a table that was renamed
     ].each_with_index.map { |note, i| [i + 1, note] }
-    former = -> { Set['pasport_series', 'old', 'gone', 'items'] }
+    former = ->(_names) { Set['pasport_series', 'old', 'gone', 'items'] }
     f = RedmineIssueForms::Form.new(RedmineIssueForms::Template.parse(TEMPLATE), notes, former_names: former)
     assert_equal ['Pasport_Series : 4512', 'Old : 2', 'Items : Qty : 0 : 5'], f.orphans.map(&:line)
     assert_equal [:unknown_key, :unknown_key, :unknown_table], f.orphans.map(&:reason)
@@ -75,17 +75,62 @@ class RedmineIssueForms::FormTest < ActiveSupport::TestCase
     assert_equal ['Acceptance : Nope : 0 : 6'], f.orphans.map(&:line)
   end
 
-  test 'former names come from the description history' do
+  test 'former names come from the whole description history' do
     enable_issue_forms
     issue = form_issue("* Pasport\n** Series: {}\n")
     issue.init_journal(User.find(1))
     issue.update!(description: "* Passport\n** Series: {}\n")
+    25.times do |i|
+      issue.init_journal(User.find(1))
+      issue.update!(description: "* Passport\n** Series: {}\n\nEdit #{i}\n")
+    end
     add_note(issue, 'Pasport_Series : 4512')
     add_note(issue, 'Remark : prose')
-    f = RedmineIssueForms::Form.for_issue(issue.reload)
+    issue.reload
+    f = RedmineIssueForms::Form.new(RedmineIssueForms::Template.parse(issue.description),
+                                    RedmineIssueForms::Form.notes_for(issue),
+                                    former_names: ->(names) { RedmineIssueForms::Form.former_names_for(issue, names) })
     assert_equal ['Pasport_Series : 4512'], f.orphans.map(&:line)
+
+    # Prose: no version has every word of "remark", so none is parsed.
+    RedmineIssueForms::Template.expects(:parse).never
+    assert_empty RedmineIssueForms::Form.former_names_for(issue, Set['remark'])
   ensure
     restore_settings
+  end
+
+  test 'the history is only asked when orphans are' do
+    calls = []
+    former = lambda do |names|
+      calls << names
+      Set['old']
+    end
+    f = RedmineIssueForms::Form.new(RedmineIssueForms::Template.parse(TEMPLATE),
+                                    [[1, "Resp : Ann\nOld : 1\nRemarque : x"]], former_names: former)
+    assert_equal 'Ann', f.field_value(field(f, 'Resp')).value
+    assert_empty calls
+    assert_equal ['Old : 1'], f.orphans.map(&:line)
+    assert f.reads_any?
+    assert_equal [Set['old', 'remarque']], calls
+  end
+
+  test 'only the most recent names are asked about' do
+    notes = (1..60).map { |i| [i, "Word#{i} : text"] }
+    asked = nil
+    f = RedmineIssueForms::Form.new(RedmineIssueForms::Template.parse(TEMPLATE), notes,
+                                    former_names: ->(names) { asked = names; Set.new })
+    f.orphans
+    assert_equal RedmineIssueForms::Form::MAX_FORMER_NAME_CANDIDATES, asked.size
+    assert_includes asked, 'word60'
+    assert_not_includes asked, 'word1'
+  end
+
+  test 'a comment only with a former key is read' do
+    f = RedmineIssueForms::Form.new(RedmineIssueForms::Template.parse(TEMPLATE), [[1, 'Old :']],
+                                    former_names: ->(_names) { Set['old'] })
+    assert f.reads_any? # the clear of an orphan changes what the form shows
+    assert_empty f.orphans
+    assert_not form(['Remarque : x']).reads_any?
   end
 
   test 'table cells, extra rows and the next row index' do

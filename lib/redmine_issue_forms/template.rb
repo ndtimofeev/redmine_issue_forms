@@ -193,11 +193,20 @@ module RedmineIssueForms
 
     # Regions Redmine's RedCloth3 leaves unformatted (its OFFTAGS). Redmine
     # has no bc./pre./notextile. block signatures - they render as plain
-    # paragraph text - so only these tags hide placeholders.
-    PRE_OPEN = /<(pre|code|kbd|notextile)\b[^>]*>/i
-    PRE_CLOSE = %r{</(pre|code|kbd|notextile)>}i
-    # Either of the above, for one linear pass over a line (#mask_offtags).
-    OFFTAG = %r{<(/?)(pre|code|kbd|notextile)\b[^<>]*>}i
+    # paragraph text - so only these tags hide placeholders. Lowercase
+    # only, like RedCloth3: "<CODE>" or "<Pre>" is shown as text, and so
+    # is a "{}" after it.
+    #
+    # PRE_OPEN_START is only where an opening tag starts; the tag itself
+    # runs to the next ">" (see .offtag_open_position). Matching it as one
+    # regex, "<pre" followed by anything up to a ">", was quadratic on a
+    # line with many "<pre" and no ">" under Ruby 3.1, which Redmine 6.0
+    # supports.
+    PRE_OPEN_START = /<(pre|code|kbd|notextile)\b/
+    PRE_CLOSE = %r{</(pre|code|kbd|notextile)>}
+    # An opening or closing tag, for one linear pass over a line
+    # (#mask_offtags).
+    OFFTAG = %r{<(/?)(pre|code|kbd|notextile)\b[^<>]*>}
 
     # A line RedCloth3 turns into a blockquote (its QUOTES_RE): it ends a
     # list, like a blank line, and a comment line like it is a quote, not a
@@ -272,7 +281,7 @@ module RedmineIssueForms
         if open_tag
           skipped << index
           open_tag = false if PRE_CLOSE.match?(line)
-        elsif (position = line =~ PRE_OPEN)
+        elsif (position = Template.offtag_open_position(line))
           unless PRE_CLOSE.match?(line[position..])
             skipped << index
             open_tag = true
@@ -453,7 +462,7 @@ module RedmineIssueForms
       bytes.scan(PLACEHOLDER) do
         match = Regexp.last_match
         content = match[1].dup.force_encoding(Encoding::UTF_8)
-        key = placeholder_key(content)
+        key = Template.placeholder_key(content)
         next if key == :not_a_placeholder
 
         start = match.begin(0)
@@ -478,18 +487,6 @@ module RedmineIssueForms
       end
     end
 
-    # nil for "{}" (auto key), the key for "{Key}", :not_a_placeholder for
-    # anything that looks like Textile styling rather than a key: CSS
-    # ("{color:red}") always has a ":" or ";", and a "|" would break the
-    # table syntax the key may end up in.
-    def placeholder_key(content)
-      stripped = content.strip
-      return nil if stripped.empty?
-      return :not_a_placeholder if stripped.match?(/[:;|]/)
-
-      stripped
-    end
-
     # The item's visible text up to the first ":" - Textile markup is taken
     # out first, so a colon inside a style ("%{color:red}Series%: {}") or a
     # link URL ("\"Doc\":https://wiki/x: {}") doesn't cut the label.
@@ -497,8 +494,7 @@ module RedmineIssueForms
       # Only the head before the first ":" is used, and it is cut to
       # MAX_LABEL_LENGTH anyway: the rest never needs cleaning.
       plain = text[0, MAX_LABEL_LENGTH * 4]
-      plain = plain.gsub(PLACEHOLDER) { |match| placeholder_key(Regexp.last_match(1)) == :not_a_placeholder ? match : '' }
-      plain = Template.strip_inline_markup(plain)
+      plain = Template.strip_inline_markup(Template.remove_placeholders(plain))
       head = plain.include?(':') ? plain.split(':', 2).first : plain
       Template.clean_label(head)
     end
@@ -547,6 +543,35 @@ module RedmineIssueForms
     end
 
     public
+
+    # nil for "{}" (auto key), the key for "{Key}", :not_a_placeholder for
+    # anything that looks like Textile styling rather than a key: CSS
+    # ("{color:red}") always has a ":" or ";", and a "|" would break the
+    # table syntax the key may end up in.
+    def self.placeholder_key(content)
+      stripped = content.strip
+      return nil if stripped.empty?
+      return :not_a_placeholder if stripped.match?(/[:;|]/)
+
+      stripped
+    end
+
+    # +text+ without its placeholders ("{}", "{Key}"); styling in braces
+    # ("{color:red}") stays, for strip_inline_markup.
+    def self.remove_placeholders(text)
+      text.gsub(PLACEHOLDER) { |match| placeholder_key(Regexp.last_match(1)) == :not_a_placeholder ? match : '' }
+    end
+
+    # The texts every key and table name made from +description+ can be
+    # found in, word by word and case folded (see
+    # Form.may_contain_name?): the description as written, which table
+    # names are taken from, and each line with the markup #item_label takes
+    # out of list labels taken out.
+    def self.searchable_texts(description)
+      text = description.to_s
+      plain = text.each_line.map { |line| strip_inline_markup(remove_placeholders(line)) }.join
+      [text.downcase, plain.downcase]
+    end
 
     # Splits "| a | b |" into [" a ", " b "], not splitting on the "|"
     # inside a Redmine wiki link "[[Page|Title]]".
@@ -606,10 +631,19 @@ module RedmineIssueForms
     # the {...} rule can't backtrack over ":" - both were quadratic on
     # long labels without Ruby 3.2's regex memoization.
     def self.strip_inline_markup(text)
-      text.gsub(%r{</?(?:pre|code|kbd|notextile)\b[^<>]*>}i, '')
+      text.gsub(%r{</?(?:pre|code|kbd|notextile)\b[^<>]*>}, '')
           .gsub(/"([^"]+?)(?:\([^()]*\))?":(?:\S*[^\s:])/, '\\1')
           .gsub(/%(?:\{[^{}]*\}|\([^()]*\)|\[[^\[\]]*\])++([^%]*)%/, '\\1')
           .gsub(/\{[^{}:;]*[:;][^{}]*\}/, '')
+    end
+
+    # Where the first opening <pre>, <code>, <kbd> or <notextile> tag of
+    # +line+ starts, or nil. Like RedCloth3's "<pre" followed by anything
+    # up to a ">": when the first "<pre" has no ">" after it, no later one
+    # has either.
+    def self.offtag_open_position(line)
+      position = line =~ PRE_OPEN_START
+      position if position && line.index('>', position)
     end
 
     # +text+ with every region that RedCloth3 leaves unformatted on this

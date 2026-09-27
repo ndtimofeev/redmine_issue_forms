@@ -42,4 +42,30 @@ class RedmineIssueForms::FlashCookieTest < Redmine::IntegrationTest
     assert_response :success
     assert_select '.flash.warning'
   end
+
+  test 'the warning shrinks to the room a big session leaves' do
+    table = 'Приёмка партии товара'
+    column = 'Замечания и комментарии проверяющего'
+    rows = (0...4).map { |i| "| #{i} |  |" }.join("\n")
+    issue = form_issue("* Итог: {}\n\n*#{table}*\n\n|_. Позиция |_. #{column} |\n#{rows}\n")
+    add_note(issue, (0...4).map { |i| "#{table} : #{column} : #{i} : чужое" }.join("\n"))
+
+    log_user('jsmith', 'jsmith')
+    # What core's context menu "Filter" link builds: an id list, saved in
+    # the session with the query - over 2 KB of cookie.
+    ids = (100_000...100_130).to_a.join(',')
+    get '/projects/ecookbook/issues', params: { set_filter: 1, status_id: '*', issue_id: ids }
+    assert_response :success
+    assert_operator cookies['_redmine_session'].bytesize, :>, 2000
+
+    values = (0...4).to_h { |i| [Keys.cell_id(table, column, i), "#{'ж' * 58} #{i}"] }
+    values[Keys.field_id('Итог')] = 'годен' # saved before the flash is set
+    assert_difference 'Journal.count', 1 do
+      post "/issues/#{issue.id}/form_values", params: { issue_form: { values: values } }
+    end
+    assert_response :redirect
+    follow_redirect!
+    assert_response :success
+    assert_select '.flash.warning', text: /ж/
+  end
 end
