@@ -1,0 +1,36 @@
+en:
+  project_module_issue_forms: "Issue forms"
+  permission_fill_issue_forms: "Fill issue forms"
+
+  label_issue_forms_trackers: "Trackers used as forms"
+  text_issue_forms_settings_hint: "Issues of these trackers are rendered as forms in projects where the \"Issue forms\" module is enabled. Only Textile text formatting is supported."
+
+  button_issue_forms_add_row: "Add row"
+  label_issue_forms_problems: "Problems in this form's template"
+  label_issue_forms_orphans: "Values that don't fit the form"
+
+  notice_issue_forms_saved: "Saved"
+  notice_issue_forms_nothing_to_save: "Nothing to save: no field was filled in or changed"
+  warning_issue_forms_conflict: "Not saved, because someone else filled these in after you opened the page: %{fields}. Check their values and edit them if needed."
+  warning_issue_forms_stale: "The description was changed after you opened the page; some of the values you typed belong to fields that no longer exist and were not saved."
+  warning_issue_forms_table_full: "No more rows can be added to %{tables} (limit: %{count} rows)."
+
+  text_issue_forms_problem_several_auto_keys: "Several {} in one list item (%{key}): give each one its own key, like {Key}"
+  text_issue_forms_problem_empty_key: "A {} whose list item has no text to build a key from: give it a key, like {Key}"
+  text_issue_forms_problem_key_colon: "Key \"%{key}\" contains \":\""
+  text_issue_forms_problem_duplicate_key: "Key \"%{key}\" is used more than once"
+  text_issue_forms_problem_key_is_table_name: "Key \"%{key}\" is also the name of a table"
+  text_issue_forms_problem_duplicate_table: "Table name \"%{table}\" is used more than once"
+  text_issue_forms_problem_table_name_colon: "Table name \"%{table}\" contains \":\""
+  text_issue_forms_problem_table_rowspan: "Table \"%{table}\": merged rows (/N.) are not supported"
+  text_issue_forms_problem_table_header_colspan: "Table \"%{table}\": merged cells in the header are not supported"
+  text_issue_forms_problem_table_empty_column: "Table \"%{table}\": a column has no name"
+  text_issue_forms_problem_table_column_colon: "Table \"%{table}\": column name \"%{column}\" contains \":\""
+  text_issue_forms_problem_table_duplicate_column: "Table \"%{table}\": column \"%{column}\" appears more than once"
+  text_issue_forms_problem_table_row_width: "Table \"%{table}\": row %{row} doesn't have as many cells as the header"
+
+  text_issue_forms_orphan_bad_cell_address: "expected Table : Column : row : value"
+  text_issue_forms_orphan_unknown_column: "no such column"
+  text_issue_forms_orphan_static_cell: "this cell is fixed text in the template"
+  text_issue_forms_orphan_no_such_row: "no such row, and this table has no row for adding new ones"
+  text_issue_forms_orphan_row_limit: "past the row limit"

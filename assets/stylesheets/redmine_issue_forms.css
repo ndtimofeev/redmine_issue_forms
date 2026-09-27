@@ -1,0 +1,118 @@
+/* Fields drawn inside an issue description (see RedmineIssueForms::Renderer).
+   Kept close to Redmine's own look: native inputs, the only colours of our
+   own are the green check mark and the red of template problems. */
+
+.wiki .issue-form-value {
+  font-weight: bold;
+}
+
+.wiki .issue-form-empty {
+  color: #999;
+}
+
+.wiki .issue-form-edit {
+  opacity: 0.4;
+  margin-left: 2px;
+  vertical-align: middle;
+}
+
+.wiki .issue-form-edit:hover,
+.wiki .issue-form-edit:focus {
+  opacity: 1;
+}
+
+/* An input with its check mark inside, at the right end: the span is the
+   positioning box, the button sits over the input's right padding. */
+.wiki .issue-form-field {
+  position: relative;
+  display: inline-block;
+  width: 14em;
+  max-width: 100%;
+  vertical-align: middle;
+}
+
+.wiki table .issue-form-field {
+  display: block;
+  width: 100%;
+  min-width: 6em;
+}
+
+.wiki .issue-form-field .issue-form-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding-right: 2em;
+}
+
+.wiki .issue-form-field button.issue-form-ok {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  bottom: 1px;
+  width: 1.9em;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0 3px 3px 0;
+  background: transparent;
+  box-shadow: none;
+  cursor: pointer;
+}
+
+.wiki .issue-form-ok-mark {
+  color: #2e9e3f;
+  font-size: 1.15em;
+  font-weight: bold;
+  line-height: 1;
+}
+
+.wiki .issue-form-field button.issue-form-ok:hover,
+.wiki .issue-form-field button.issue-form-ok:focus {
+  background: #e8f5ea;
+}
+
+.wiki .issue-form-field button.issue-form-ok:hover .issue-form-ok-mark,
+.wiki .issue-form-field button.issue-form-ok:focus .issue-form-ok-mark {
+  color: #1f7a2e;
+}
+
+.wiki .issue-form-cancel {
+  margin-left: 4px;
+  font-size: 0.9em;
+}
+
+.wiki .issue-form-problem {
+  color: #c00;
+  border-bottom: 1px dotted #c00;
+  cursor: help;
+}
+
+.wiki .issue-form-problems,
+.wiki .issue-form-orphans {
+  margin-top: 1em;
+  padding: 4px 8px;
+  font-size: 0.9em;
+  border-left: 3px solid #e0b000;
+  background: #fffbe6;
+}
+
+.wiki .issue-form-problems {
+  border-left-color: #c00;
+  background: #fff0f0;
+}
+
+.wiki .issue-form-notes-title {
+  margin: 0;
+  font-weight: bold;
+}
+
+/* Phones (Redmine's own responsive breakpoint): fields take the full
+   width of their line so a table stays within the screen. */
+@media screen and (max-width: 899px) {
+  .wiki .issue-form-field {
+    width: 100%;
+  }
+
+  .wiki table .issue-form-field {
+    min-width: 4em;
+  }
+}

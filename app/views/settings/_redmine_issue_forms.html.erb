@@ -1,0 +1,15 @@
+<%# Plugin settings (Administration -> Plugins -> Configure). The blank
+    hidden value makes unchecking every tracker save an empty list instead
+    of keeping the old one; RedmineIssueForms.tracker_ids drops it. %>
+<% selected = RedmineIssueForms.tracker_ids %>
+<p>
+  <label><%= l(:label_issue_forms_trackers) %></label>
+  <%= hidden_field_tag 'settings[tracker_ids][]', '', id: nil %>
+  <% Tracker.sorted.each do |tracker| %>
+    <label class="block">
+      <%= check_box_tag 'settings[tracker_ids][]', tracker.id, selected.include?(tracker.id.to_s), id: "settings_tracker_ids_#{tracker.id}" %>
+      <%= tracker.name %>
+    </label>
+  <% end %>
+  <em class="info"><%= l(:text_issue_forms_settings_hint) %></em>
+</p>

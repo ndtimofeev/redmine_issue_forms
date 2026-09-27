@@ -1,0 +1,36 @@
+ru:
+  project_module_issue_forms: "Формы в задачах"
+  permission_fill_issue_forms: "Заполнение форм в задачах"
+
+  label_issue_forms_trackers: "Трекеры-формы"
+  text_issue_forms_settings_hint: "Задачи этих трекеров показываются как формы в проектах, где включён модуль «Формы в задачах». Поддерживается только разметка Textile."
+
+  button_issue_forms_add_row: "Добавить строку"
+  label_issue_forms_problems: "Ошибки в шаблоне формы"
+  label_issue_forms_orphans: "Значения без поля"
+
+  notice_issue_forms_saved: "Сохранено"
+  notice_issue_forms_nothing_to_save: "Нечего сохранять: ни одно поле не заполнено и не изменено"
+  warning_issue_forms_conflict: "Не сохранено, потому что эти поля уже заполнил кто-то другой после того, как вы открыли страницу: %{fields}. Проверьте их значения и при необходимости исправьте."
+  warning_issue_forms_stale: "Описание задачи изменили после того, как вы открыли страницу. Часть введённых значений относится к полям, которых больше нет, и не сохранена."
+  warning_issue_forms_table_full: "В таблицу %{tables} больше нельзя добавить строк (предел: %{count})."
+
+  text_issue_forms_problem_several_auto_keys: "Несколько {} в одном пункте списка (%{key}): задайте каждому свой ключ, например {Ключ}"
+  text_issue_forms_problem_empty_key: "У {} в пункте списка нет текста, из которого можно собрать ключ: задайте ключ явно, например {Ключ}"
+  text_issue_forms_problem_key_colon: "Ключ «%{key}» содержит «:»"
+  text_issue_forms_problem_duplicate_key: "Ключ «%{key}» используется больше одного раза"
+  text_issue_forms_problem_key_is_table_name: "Ключ «%{key}» совпадает с именем таблицы"
+  text_issue_forms_problem_duplicate_table: "Имя таблицы «%{table}» используется больше одного раза"
+  text_issue_forms_problem_table_name_colon: "Имя таблицы «%{table}» содержит «:»"
+  text_issue_forms_problem_table_rowspan: "Таблица «%{table}»: объединение строк (/N.) не поддерживается"
+  text_issue_forms_problem_table_header_colspan: "Таблица «%{table}»: объединённые ячейки в заголовке не поддерживаются"
+  text_issue_forms_problem_table_empty_column: "Таблица «%{table}»: у колонки нет названия"
+  text_issue_forms_problem_table_column_colon: "Таблица «%{table}»: название колонки «%{column}» содержит «:»"
+  text_issue_forms_problem_table_duplicate_column: "Таблица «%{table}»: колонка «%{column}» встречается больше одного раза"
+  text_issue_forms_problem_table_row_width: "Таблица «%{table}»: в строке %{row} не столько ячеек, сколько в заголовке"
+
+  text_issue_forms_orphan_bad_cell_address: "ожидается Таблица : Колонка : строка : значение"
+  text_issue_forms_orphan_unknown_column: "нет такой колонки"
+  text_issue_forms_orphan_static_cell: "эта ячейка в шаблоне заполнена постоянным текстом"
+  text_issue_forms_orphan_no_such_row: "нет такой строки, а добавлять строки в эту таблицу нельзя"
+  text_issue_forms_orphan_row_limit: "за пределом числа строк"
