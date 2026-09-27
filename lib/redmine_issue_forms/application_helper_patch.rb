@@ -10,10 +10,16 @@ module RedmineIssueForms
   # textilizable(issue, :description, ...) for an issue that is a form (see
   # RedmineIssueForms.form_issue?) and passes every other call - journals,
   # wiki pages, previews, other issues - straight to core.
+  #
+  # :event_description is the same text under another name: Atom feeds
+  # (common/feed.atom.builder) render events with it, and for an issue
+  # acts_as_event maps it to the description.
   module ApplicationHelperPatch
+    DESCRIPTION_ATTRIBUTES = %w[description event_description].freeze
+
     def textilizable(*args)
       issue = args[0]
-      if issue.is_a?(Issue) && args[1].to_s == 'description' &&
+      if issue.is_a?(Issue) && DESCRIPTION_ATTRIBUTES.include?(args[1].to_s) &&
          issue.description.present? && RedmineIssueForms.form_issue?(issue)
         # textilizable mutates its options (it deletes :only_path), so the
         # caller's hash is left alone.

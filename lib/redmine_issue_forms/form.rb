@@ -9,10 +9,11 @@ module RedmineIssueForms
   #
   # Reading rules (see #apply_line):
   # * every line of every public note is looked at on its own; other text
-  #   in the same comment is simply ignored;
+  #   in the same comment is simply ignored, and so are quoted lines
+  #   ("> ...", what Redmine's Quote button produces);
   # * "Key : value" sets a list field, "Table : Column : row : value" a
-  #   table cell; whitespace around ":" is optional when reading, although
-  #   the plugin itself always writes " : ";
+  #   table cell. The colon needs whitespace before it (see SEPARATOR), so
+  #   "Result: fine" in an ordinary comment is prose, not a value;
   # * notes are read oldest first, so the last value wins; "Key :" with
   #   nothing after it clears the field again;
   # * private notes are ignored, otherwise people with different
@@ -20,10 +21,13 @@ module RedmineIssueForms
   class Form
     Entry = Struct.new(:value, :journal_id)
 
-    # A comment line that is clearly aimed at a form table (it starts with
-    # the name of one) but can't be placed in it. List keys can't produce
-    # orphans: "Something : text" is an everyday sentence in a comment, so
-    # a line whose key isn't in the template is just ignored.
+    # A comment line that looks like a form value but has no place in the
+    # form. Two kinds (see #orphans):
+    # * a line that names a form table but can't be placed in it (unknown
+    #   column, fixed cell, no such row...);
+    # * a value for a key or table that isn't in the template (any more):
+    #   typically the description was edited after the form was filled and
+    #   a label changed. Shown so nothing disappears silently (design §8).
     Orphan = Struct.new(:line, :journal_id, :reason)
 
     # Something a value can be written to. +kind+ is :field, :cell (an
@@ -31,7 +35,20 @@ module RedmineIssueForms
     # row, see Keys.new_cell_id).
     Target = Struct.new(:id, :kind, :field, :table, :column, :row, keyword_init: true)
 
-    SEPARATOR = /[[:blank:]]*:[[:blank:]]*/
+    # " : " - a colon with whitespace before it and whitespace (or the end
+    # of the line) after it, as the plugin itself writes it. The space
+    # before the colon is what tells a value from ordinary prose ("Result:
+    # fine", "call me at 10:30"), and it lets a value contain colons
+    # ("T : Time : 1 : 10:30").
+    #
+    # (?<!...) and the atomic group keep matching linear: without them a
+    # long run of blanks with no colon after it is rescanned from every
+    # position in the run.
+    SEPARATOR = /(?<![[:blank:]])(?>[[:blank:]]+):(?:[[:blank:]]+|\z)/
+
+    # "Table : Column : 3 : value" - unmistakably a table cell even when no
+    # table of that name exists.
+    CELL_ROW = /\A\d+\z/
 
     def self.for_issue(issue)
       new(Template.parse(issue.description), notes_for(issue))
@@ -49,7 +66,7 @@ module RedmineIssueForms
              .pluck(:id, :notes)
     end
 
-    attr_reader :template, :orphans
+    attr_reader :template
 
     # +notes+: [[journal_id, text], ...] ordered oldest first.
     def initialize(template, notes)
@@ -57,17 +74,31 @@ module RedmineIssueForms
       @field_values = {}
       @cell_values = {}
       @orphans = []
-      @last_journal_id = 0
+      @unknown_values = {} # normalized key or cell address => Orphan, last one wins
+      @lines_read = 0
       notes.each do |journal_id, text|
-        @last_journal_id = journal_id if journal_id > @last_journal_id
-        text.to_s.each_line { |line| apply_line(line.strip, journal_id) }
+        lines = text.to_s.each_line.map(&:strip).reject(&:empty?)
+        # A comment made of nothing but value lines - what the plugin
+        # writes, or someone typing values by hand. Only in such a comment
+        # is a line with an unknown key taken for a lost value rather than
+        # for a sentence that happens to contain " : ".
+        values_only = lines.all? { |line| value_line?(line) }
+        lines.each { |line| apply_line(line, journal_id, values_only) }
       end
     end
 
-    # Highest id among the notes that were read. The renderer puts it in
-    # the form so the controller can tell whether a value that is being
-    # *edited* changed after the page was rendered.
-    attr_reader :last_journal_id
+    # Whether any line of the notes was a value for this form, or an orphan.
+    def reads_any?
+      @lines_read.positive?
+    end
+
+    # Comment lines that look like values but have no place in the form,
+    # in the order they were written.
+    def orphans
+      @orphans_sorted ||= (@orphans + @unknown_values.values).each_with_index
+                                                              .sort_by { |orphan, index| [orphan.journal_id, index] }
+                                                              .map(&:first)
+    end
 
     def field_value(field)
       @field_values[field.normalized_key]
@@ -100,7 +131,12 @@ module RedmineIssueForms
     end
 
     def can_add_row?(table)
-      table.tail? && next_row_index(table) < MAX_TABLE_ROWS
+      table.tail? && next_row_index(table) < row_limit(table)
+    end
+
+    # Rows a table with a tail may grow to through comments.
+    def row_limit(table)
+      [MAX_TABLE_ROWS, MAX_TABLE_CELLS / table.columns.size].min
     end
 
     # Every place a value can currently be written to, keyed by HTML id, in
@@ -128,6 +164,16 @@ module RedmineIssueForms
     # "Passport_Series" or "Acceptance : Qty : 1".
     def target_label(target)
       note_line(target, '', row: target.row).delete_suffix(' :')
+    end
+
+    # A fingerprint of the rows a table's cells are numbered by: its header
+    # and data rows, as written in the template. The renderer puts it in
+    # the form, and Submission refuses cell values if it changed before
+    # they were saved: after a row was inserted or removed, "row 1" is a
+    # different row.
+    def layout(table)
+      rows = [table.header, *table.rows]
+      Keys.digest('layout', *rows.map { |row| template.lines[row.line_index].strip })
     end
 
     def cell_target(table, column, row)
@@ -166,11 +212,14 @@ module RedmineIssueForms
       result
     end
 
-    def apply_line(line, journal_id)
-      return if line.empty?
+    def value_line?(line)
+      !line.start_with?('>') && line.split(SEPARATOR, 2).size == 2
+    end
+
+    def apply_line(line, journal_id, values_only)
+      return unless value_line?(line)
 
       parts = line.split(SEPARATOR, 4)
-      return if parts.size < 2
 
       # Checked first: a list key can never be equal to a table name (see
       # Template#validate), so "Name : ..." is either a table line or
@@ -180,11 +229,34 @@ module RedmineIssueForms
         return
       end
 
+      if parts.size == 4 && parts[2].match?(CELL_ROW)
+        # A cell of a table that isn't in the template (renamed?). Unless
+        # "Key : a : 1 : b" is a value for a list field that happens to
+        # look like that.
+        field = template.field_for_key(parts[0])
+        unless field
+          address = parts[0..2].map { |part| Keys.normalize(part) }
+          remember_unknown(address, parts[3], line, journal_id, :unknown_table)
+          return
+        end
+      end
+
       key, value = line.split(SEPARATOR, 2)
       field = template.field_for_key(key)
-      return unless field
+      if field
+        store(@field_values, field.normalized_key, value.strip, journal_id)
+      elsif values_only
+        remember_unknown(Keys.normalize(key), value, line, journal_id, :unknown_key)
+      end
+    end
 
-      store(@field_values, field.normalized_key, value.to_s.strip, journal_id)
+    # A value for something the template doesn't have. Like a real value,
+    # the last one wins and an empty one clears it: after "Old : 1",
+    # "Old : 2" only the latter is shown, and after "Old :" neither.
+    def remember_unknown(key, value, line, journal_id, reason)
+      @lines_read += 1
+      @unknown_values.delete(key)
+      @unknown_values[key] = Orphan.new(line, journal_id, reason) unless value.strip.empty?
     end
 
     def apply_table_line(table, parts, line, journal_id)
@@ -192,10 +264,10 @@ module RedmineIssueForms
       # a table's name - not an attempt to address a cell.
       return if parts.size < 3
 
-      unless parts.size == 4 && parts[2].match?(/\A\d+\z/)
+      unless parts.size == 4 && parts[2].match?(CELL_ROW)
         # "Table : Column : something" that isn't a cell address - most
         # likely a typo in a hand-written comment.
-        @orphans << Orphan.new(line, journal_id, :bad_cell_address)
+        add_orphan(line, journal_id, :bad_cell_address)
         return
       end
 
@@ -208,19 +280,25 @@ module RedmineIssueForms
           :static_cell unless table.rows[row].cell_at(column)&.input?
         elsif !table.tail?
           :no_such_row
-        elsif row >= MAX_TABLE_ROWS
+        elsif row >= row_limit(table)
           :row_limit
         end
 
       if reason
-        @orphans << Orphan.new(line, journal_id, reason)
+        add_orphan(line, journal_id, reason)
         return
       end
 
       store(@cell_values, [table.normalized_name, column, row], parts[3].strip, journal_id)
     end
 
+    def add_orphan(line, journal_id, reason)
+      @lines_read += 1
+      @orphans << Orphan.new(line, journal_id, reason)
+    end
+
     def store(hash, key, value, journal_id)
+      @lines_read += 1
       if value.empty?
         hash.delete(key)
       else

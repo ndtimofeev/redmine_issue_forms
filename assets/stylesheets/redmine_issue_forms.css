@@ -10,10 +10,51 @@
   color: #999;
 }
 
+/* Core draws the focus of input[type="text"] only, and these inputs have
+   no type attribute (see Renderer#input_tag): the same look, by class. */
+.wiki .issue-form-field .issue-form-input:focus,
+.wiki .issue-form-field .issue-form-input:active {
+  border: 1px solid #5ad;
+  outline: none;
+}
+
+/* The pencil and Cancel are submit buttons (so they save what was typed,
+   see Renderer#edit_button) drawn like the links they used to be. */
+.wiki button.issue-form-edit,
+.wiki button.issue-form-cancel {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  box-shadow: none;
+  font: inherit;
+  cursor: pointer;
+}
+
+.wiki button.issue-form-cancel {
+  color: #169;
+}
+
+.wiki button.issue-form-cancel:hover {
+  color: #c61a1a;
+  text-decoration: underline;
+}
+
 .wiki .issue-form-edit {
   opacity: 0.4;
   margin-left: 2px;
   vertical-align: middle;
+}
+
+/* The invisible first button that Enter presses (Renderer#default_button).
+   Moved off screen rather than display:none, so every browser still
+   treats it as the form's default button. */
+.wiki .issue-form-default {
+  position: absolute;
+  left: -10000px;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
 }
 
 .wiki .issue-form-edit:hover,

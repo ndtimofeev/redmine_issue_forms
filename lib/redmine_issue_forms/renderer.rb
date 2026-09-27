@@ -27,13 +27,27 @@ module RedmineIssueForms
   class Renderer
     include Redmine::I18n
 
+    # Saving the form leaves the page, and core's warning about unsaved
+    # text (warnLeavingUnsaved in application.js) is switched off by any
+    # form submit - so a note half typed in the issue's Edit panel would be
+    # lost without a word when someone presses a check mark. This asks
+    # first, with core's own message and only when core would have warned
+    # (the message global exists only if the user's preference is on).
+    # stopPropagation keeps the submit from reaching core's and rails-ujs'
+    # handlers when the person chooses to stay. Without JavaScript the
+    # attribute does nothing.
+    UNSAVED_TEXT_GUARD =
+      "if (window.warnLeavingUnsavedMessage && window.jQuery && " \
+      "$('textarea').filter(function() { return $(this).data('changed'); }).length > 0 && " \
+      "!confirm(window.warnLeavingUnsavedMessage)) { event.stopPropagation(); return false; }".freeze
+
     # +view+ is the view context textilizable was called on.
     def initialize(view, issue)
       @view = view
       @issue = issue
       @markers = []
       @nonce = SecureRandom.hex(4)
-      @has_inputs = false
+      @has_controls = false
     end
 
     # Yields the rewritten Textile source to the block, which must render
@@ -45,11 +59,10 @@ module RedmineIssueForms
       return nil if template.empty?
 
       @form = Form.new(template, Form.notes_for(@issue))
-      html = yield(build_source).to_str
-      html = html.gsub(/ifm#{@nonce}n(\d+)z/) { @markers[Regexp.last_match(1).to_i] }
+      html = substitute_markers(yield(build_source).to_str)
       html = html.html_safe # rubocop:disable Rails/OutputSafety - every inserted piece is built with escaping helpers below
 
-      html = wrap_in_form(html) if interactive? && @has_inputs
+      html = wrap_in_form(html) if interactive? && @has_controls
       html + notes_block
     end
 
@@ -86,9 +99,66 @@ module RedmineIssueForms
 
     # --- source rewriting --------------------------------------------------
 
-    def marker(html)
-      @markers << html
+    # +plain+ is the text that stands for the marker where HTML can't go
+    # (see #substitute_markers): the value, or the placeholder as written.
+    def marker(html, plain = '', label: nil)
+      @markers << [html, plain.to_s, label]
       "ifm#{@nonce}n#{@markers.size - 1}z"
+    end
+
+    # Put in the first cell of a table row that must stay where it is when
+    # someone sorts the table by clicking a column header: the tail and the
+    # blank new row. Core makes every wiki table with a header row sortable
+    # (setupWikiTableSortableHeader in application.js, using Tablesort),
+    # and Tablesort leaves alone only rows marked data-sort-method="none".
+    # See #pin_rows.
+    def row_pin
+      "ifm#{@nonce}pz"
+    end
+
+    # Swaps markers for our HTML, in one pass per step so nothing inserted
+    # is ever scanned again.
+    #
+    # Textile and Redmine can copy a marker into a tag - "{}@corp.ru" is
+    # auto-linked as an e-mail, "https://crm/orders/{}" as a URL - often in
+    # both the href and the link text. Inside a tag only the plain text
+    # may go (the value, or "{}"); a field caught this way gets no input
+    # anywhere, since an input inside a link can't work, and people who
+    # can fill the form are told to put spaces around it (#notes_block).
+    # A marker that appears twice in text gets its HTML once and the plain
+    # text after that, so no id is ever duplicated.
+    def substitute_markers(html)
+      html = pin_rows(html)
+      pattern = /ifm#{@nonce}n(\d+)z/
+      @caught_in_tags = Set.new
+      html = html.gsub(/<[^>]*>/) do |tag|
+        tag.gsub(pattern) do
+          index = Regexp.last_match(1).to_i
+          @caught_in_tags << index
+          ERB::Util.h(@markers[index][1])
+        end
+      end
+
+      used = Set.new
+      html.gsub(pattern) do
+        index = Regexp.last_match(1).to_i
+        html_piece, plain, = @markers[index]
+        if @caught_in_tags.include?(index) || !used.add?(index)
+          ERB::Util.h(plain)
+        else
+          html_piece
+        end
+      end
+    end
+
+    # Marks the <tr> around every #row_pin as not sortable and drops the
+    # pin itself. RedCloth writes form table rows as a bare "<tr>" (a row
+    # attribute would stop the plugin from seeing the line as a table row
+    # at all, see Template::TABLE_ROW), so only that exact tag is looked for.
+    def pin_rows(html)
+      pin = row_pin
+      html = html.gsub(%r{<tr>(?=(?:(?!</tr>).)*?#{pin})}m, '<tr data-sort-method="none">')
+      html.gsub(/[[:blank:]]*#{pin}[[:blank:]]*/, '')
     end
 
     def build_source
@@ -98,7 +168,7 @@ module RedmineIssueForms
         line = lines[line_index].dup
         # Right to left, so earlier offsets stay valid.
         fields.sort_by(&:start).reverse_each do |field|
-          line[field.start, field.length] = marker(field_html(field))
+          line[field.start, field.length] = marker(field_html(field), plain_for_field(field), label: field.key)
         end
         lines[line_index] = line
       end
@@ -123,9 +193,17 @@ module RedmineIssueForms
           end
       end
 
-      rows << template.lines[table.tail.line_index] if table.tail
-      rows << new_row_source(table) if interactive? && form.can_add_row?(table)
+      rows << tail_source(table) if table.tail
+      if interactive? && table.tail?
+        rows << (form.can_add_row?(table) ? new_row_source(table) : full_row_source(table))
+      end
       rows.join("\n")
+    end
+
+    # The tail row as written, pinned in place (see #row_pin).
+    def tail_source(table)
+      cells = table.tail.cells
+      row_line(cells.map(&:prefix), ["#{row_pin} #{cells.first.content}"])
     end
 
     # A row of the template: static cells keep their text, empty ones get
@@ -136,7 +214,7 @@ module RedmineIssueForms
       contents = row.cells.map do |cell|
         next cell.content unless cell.input?
 
-        marker(cell_html(form.cell_target(table, cell.column, row_index)))
+        cell_marker(form.cell_target(table, cell.column, row_index))
       end
       row_line(row.cells.map(&:prefix), contents)
     end
@@ -144,7 +222,7 @@ module RedmineIssueForms
     # A row that exists only because comments wrote to it.
     def extra_row_source(table, row_index)
       contents = table.columns.each_index.map do |column|
-        marker(cell_html(form.cell_target(table, column, row_index)))
+        cell_marker(form.cell_target(table, column, row_index))
       end
       row_line([''] * contents.size, contents)
     end
@@ -157,7 +235,23 @@ module RedmineIssueForms
         marker(input_tag(id, nil, label: "#{table.name} : #{column_name}", placeholder: column_name,
                                   button: add_row_button))
       end
+      contents[0] = "#{row_pin} #{contents[0]}"
       row_line([''] * contents.size, contents)
+    end
+
+    # In place of the new row once a table has as many rows as it may
+    # have, so the tail's invitation to add rows isn't left unexplained.
+    def full_row_source(table)
+      note = view.content_tag(:em, l(:text_issue_forms_table_full, count: form.row_limit(table)))
+      "|\\#{table.columns.size}. #{row_pin} #{marker(note)} |"
+    end
+
+    def cell_marker(target)
+      marker(cell_html(target), form.value_for(target)&.value, label: form.target_label(target))
+    end
+
+    def plain_for_field(field)
+      (field.valid? && form.value_for(form.targets[field.id])&.value) || field.source
     end
 
     def row_line(prefixes, contents)
@@ -177,7 +271,7 @@ module RedmineIssueForms
       target = form.targets[field.id]
       entry = form.value_for(target)
       if interactive? && (entry.nil? || editing_id == field.id)
-        input_tag(field.id, entry&.value, label: field.key, edited: entry.present?) + cancel_link(field.id, entry)
+        input_tag(field.id, entry&.value, label: field.key, edited: entry.present?) + cancel_button(field.id, entry)
       elsif entry
         value_html(field.id, entry.value)
       else
@@ -189,7 +283,7 @@ module RedmineIssueForms
       entry = form.value_for(target)
       label = form.target_label(target)
       if interactive? && (entry.nil? || editing_id == target.id)
-        input_tag(target.id, entry&.value, label: label, edited: entry.present?) + cancel_link(target.id, entry)
+        input_tag(target.id, entry&.value, label: label, edited: entry.present?) + cancel_button(target.id, entry)
       elsif entry
         value_html(target.id, entry.value)
       else
@@ -199,7 +293,7 @@ module RedmineIssueForms
 
     def value_html(id, value)
       html = view.content_tag(:span, value, class: 'issue-form-value', id: id)
-      html += ' '.html_safe + edit_link(id) if interactive?
+      html += ' '.html_safe + edit_button(id) if interactive?
       html
     end
 
@@ -209,17 +303,22 @@ module RedmineIssueForms
     # Every input gets its own check mark, in tables too, so the button is
     # always right where the person was typing.
     def input_tag(id, value, label:, edited: false, placeholder: nil, button: save_button)
-      @has_inputs = true
-      html = view.text_field_tag(
-        "issue_form[values][#{id}]", value,
+      @has_controls = true
+      # No type attribute - still a text input, but not one core's
+      # defaultFocus() (application.js) picks up: it focuses the first
+      # '#content input[type=text]' on every issue page opened without an
+      # anchor, which would scroll the page down to the first empty field.
+      html = view.tag.input(
+        name: "issue_form[values][#{id}]", value: value,
         id: id, class: 'issue-form-input', placeholder: placeholder, 'aria-label': label,
-        # The pencil link lands on this input: put the cursor in it.
+        # The pencil lands on this input: put the cursor in it.
         autofocus: edited && editing_id == id
       )
       html += button
-      # Marks the input as opened with the pencil: only such inputs may
-      # overwrite or clear an existing value (see Submission).
-      html += view.hidden_field_tag('issue_form[edited][]', id, id: nil) if edited
+      # Marks the input as opened with the pencil, and remembers what it
+      # showed: only such inputs may overwrite or clear an existing value,
+      # and only if nobody changed it meanwhile (see Submission).
+      html += view.hidden_field_tag("issue_form[original][#{id}]", value, id: nil) if edited
       view.content_tag(:span, html, class: 'issue-form-field')
     end
 
@@ -240,39 +339,69 @@ module RedmineIssueForms
     # first, but inside a button it rendered clipped and blurry in
     # Chromium; a glyph needs no sprite and scales with the font.
     def ok_button(title, css_class)
-      view.button_tag(
+      form_button(
         view.content_tag(:span, "\u2714\uFE0E", class: 'issue-form-ok-mark', 'aria-hidden': true),
-        type: 'submit', name: nil, class: "issue-form-ok #{css_class}", title: title, 'aria-label': title
+        class: "issue-form-ok #{css_class}", title: title, 'aria-label': title
       )
     end
 
-    def edit_link(id)
-      view.link_to(
+    # The pencil next to a value. A submit button of the form rather than a
+    # link, so that whatever was typed into other fields is saved instead
+    # of being thrown away by a page load: the controller saves the form,
+    # then redirects back with this value opened for editing
+    # (?issue_form_edit=ID, see #editing_id).
+    def edit_button(id)
+      @has_controls = true
+      form_button(
         view.sprite_icon('edit', l(:button_edit), icon_only: true),
-        view.issue_path(@issue, issue_form_edit: id, anchor: id),
-        class: 'icon-only icon-edit issue-form-edit', title: l(:button_edit)
+        name: 'issue_form[open]', value: id, class: 'icon-only icon-edit issue-form-edit', title: l(:button_edit)
       )
     end
 
-    def cancel_link(id, entry)
+    # "Cancel" next to a value opened with the pencil: closes it unchanged
+    # (the controller drops this field from what it saves), and saves the
+    # other fields, for the same reason as #edit_button.
+    def cancel_button(id, entry)
       return ''.html_safe unless entry && editing_id == id
 
-      ' '.html_safe + view.link_to(l(:button_cancel), view.issue_path(@issue, anchor: id), class: 'issue-form-cancel')
+      ' '.html_safe + form_button(l(:button_cancel), name: 'issue_form[cancel]', value: id, class: 'issue-form-cancel')
     end
 
-    # One form around the whole description: every check mark button
-    # submits everything that was typed (see Submission). Wrapping the
-    # description instead of using per-row <form> elements keeps the markup
-    # valid - a <form> can't sit inside a <tr> - and needs no JavaScript at
-    # all. There is no separate "save all" button at the bottom: every
-    # input has its own check mark, and any of them, or Enter, saves
-    # everything.
+    # Every button of the form. data-disable makes rails-ujs (loaded on
+    # every Redmine page) disable all of them once the form is submitted,
+    # so a double click can't post the same values twice - which for the
+    # new row of a table would add the row twice. Without JavaScript the
+    # attribute does nothing and the buttons work as usual.
+    def form_button(content, name: nil, **options)
+      view.button_tag(content, type: 'submit', name: name, data: { disable: true }, **options)
+    end
+
+    # What Enter in any input presses. Browsers submit a form on Enter by
+    # clicking its first submit button, which could otherwise be a pencil
+    # or a Cancel, so an invisible plain save button goes first.
+    def default_button
+      form_button('', class: 'issue-form-default', tabindex: -1, 'aria-hidden': true)
+    end
+
+    # One form around the whole description: every button in it - check
+    # marks, pencils, Cancel - submits everything that was typed (see
+    # Submission). Wrapping the description instead of using per-row
+    # <form> elements keeps the markup valid - a <form> can't sit inside a
+    # <tr> - and needs no JavaScript at all. There is no separate "save
+    # all" button at the bottom: every input has its own check mark, and
+    # any of them, or Enter, saves everything.
     def wrap_in_form(html)
-      footer = view.hidden_field_tag('issue_form[seen]', form.last_journal_id, id: nil)
+      footer = view.safe_join(template.form_tables.map do |table|
+        view.hidden_field_tag("issue_form[layouts][#{Keys.table_id(table.name)}]", form.layout(table), id: nil)
+      end)
       # form_tag without a block returns just the opening tag (with the
       # CSRF token), which avoids depending on the view's output buffer.
-      view.form_tag(view.issue_form_values_path(@issue), method: :post, class: 'issue-form', id: 'issue-form') +
-        html + footer + '</form>'.html_safe
+      # Not id="issue-form": that is core's own issue edit form on the same
+      # page, which application.js serializes by that id to refresh the
+      # edit form when the status or tracker changes.
+      view.form_tag(view.issue_form_values_path(@issue), method: :post, class: 'issue-form', id: 'issue-form-values',
+                                                         onsubmit: UNSAVED_TEXT_GUARD) +
+        default_button + html + footer + '</form>'.html_safe
     end
 
     # Template problems and orphaned table values, shown only to people
@@ -281,7 +410,12 @@ module RedmineIssueForms
       return ''.html_safe unless interactive?
 
       html = ''.html_safe
-      problems = (template.fields + template.tables).filter_map(&:problem).uniq
+      problems = (template.fields + template.tables).filter_map(&:problem)
+      @caught_in_tags.each do |index|
+        label = @markers[index][2]
+        problems << Template::Problem.new(:placeholder_in_link, key: label) if label
+      end
+      problems.uniq!
       if problems.any?
         html += view.content_tag(:div, class: 'issue-form-problems') do
           view.content_tag(:p, l(:label_issue_forms_problems), class: 'issue-form-notes-title') +

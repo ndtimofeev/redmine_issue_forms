@@ -90,9 +90,12 @@ Items : Checked by : 0 : Smith
 ### How comments are read
 
 * Every line of every comment is read on its own; other text around it is
-  fine.
-* Whitespace around `:` is optional when reading (`Key: value` works); the
-  plugin itself always writes `Key : value`.
+  fine. Quoted lines (`> ...`) are skipped.
+* The colon needs a space before it: `Key : value`, the way the plugin
+  itself writes it (`Key :value` at the end of a line works too).
+  `Key: value` is ordinary prose, so a comment like "Result: all fine"
+  never fills a field by accident. A value may contain colons
+  (`Items : Time : 0 : 10:30`).
 * Keys, table and column names are matched ignoring case and extra
   spaces.
 * The latest comment wins. `Key :` with nothing after it clears the field.
@@ -103,28 +106,47 @@ Items : Checked by : 0 : Smith
 * Empty fields are drawn as inputs with a green check mark at their right
   end, inside the input. Every check mark, and Enter, saves *everything*
   typed in the form, as one comment.
-* A filled value has a pencil link. It opens the value in an input; saving
-  it empty clears the value.
-* If someone else filled a field after you opened the page, your value for
-  it is not saved and you get a warning, so nobody overwrites a value they
-  never saw.
-* Everything works without JavaScript.
+* A filled value has a pencil. It saves whatever was typed elsewhere in
+  the form and opens the value in an input; saving it empty clears the
+  value. *Cancel* closes it unchanged.
+* If someone else changed a field after you opened the page, your value
+  for it is not saved, so nobody overwrites a value they never saw. The
+  warning repeats what you typed, so nothing has to be retyped from
+  memory. The same goes for fields that no longer exist, and for rows
+  added to a table that is full.
+* Everything works without JavaScript. With it, buttons can't be pressed
+  twice, and Redmine's "unsaved text" warning also covers the form: saving
+  it while a note is half typed in the *Edit* panel asks first.
+* Editing or deleting a comment that holds form values reloads the page,
+  so the form shows what is true now (unless something is typed on the
+  page: then a note asks to reload).
 
 Only people who can add comments see inputs, and only on the issue page.
-Everywhere else (e-mail notifications, PDF export, the description column
-of issue lists) the form is shown read-only: values, or a dash for empty
-fields.
+Everywhere else (HTML e-mail notifications, PDF export, Atom feeds, the
+description column of issue lists) the form is shown read-only: values,
+or a dash for empty fields.
 
 People who can fill the form also see, under it, mistakes in the template
-(duplicate keys, unsupported tables...) and comment lines that name a
-table but don't fit into it.
+(duplicate keys, unsupported tables...) and, as *Values that don't fit the
+form*, comment lines that can't be placed: a cell that doesn't exist in a
+table, or a value whose field or table is no longer in the template (a
+label was renamed after the form was filled). For a key the template
+doesn't have, only comments made of nothing but `Key : value` lines count,
+so an everyday sentence with " : " in it isn't listed.
 
 ## Limits
 
-* Textile only. With Markdown / CommonMark the plugin does nothing.
+* Textile only. With Markdown / CommonMark the plugin does nothing (the
+  plugin settings page says so).
+* Table rows are addressed by number. Inserting or removing a row in the
+  template moves the values below it to other rows; do it before a form is
+  filled. (A value typed on a page opened before such a change is refused
+  as "moved", not written to the wrong row.)
 * No merged rows (`/2.`) in form tables, no merged cells in their header.
-* A table can grow to 200 rows.
+* A table can grow to 200 rows (fewer for very wide tables).
 * Values are plain single-line text.
+* The plain-text part of e-mail notifications shows the description as
+  written, with its `{}`; the HTML part shows the values.
 
 ## Development
 

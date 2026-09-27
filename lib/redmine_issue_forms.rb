@@ -30,6 +30,11 @@ module RedmineIssueForms
   # orphaned (see Form#orphans) instead of being silently dropped.
   MAX_TABLE_ROWS = 200
 
+  # ...and on how many cells, so that a very wide table can't multiply
+  # that bound: a table's row limit is the smaller of MAX_TABLE_ROWS and
+  # MAX_TABLE_CELLS / its number of columns (see Form#row_limit).
+  MAX_TABLE_CELLS = 2000
+
   class << self
     def settings
       Setting.plugin_redmine_issue_forms || {}

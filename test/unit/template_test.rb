@@ -48,25 +48,59 @@ class RedmineIssueForms::TemplateTest < ActiveSupport::TestCase
     assert_empty template.fields
   end
 
-  test 'placeholders inside pre, notextile and bc. blocks are left alone' do
+  test 'placeholders inside multi-line pre, code, kbd and notextile tags are left alone' do
     template = parse(<<~T)
       <pre>
       * In pre {}
       </pre>
-      bc. * In bc {}
-      * still bc {}
-
-      notextile. * In notextile {}
-
-      bc.. * extended {}
-
-      * still extended {}
-
-      p. back
-
-      * Real {}
+      <code>
+      * In code {}
+      </code>
+      <notextile>
+      * In notextile {}
+      </notextile>
+      * Inline <code>x</code>: {}
     T
-    assert_equal ['Real'], template.fields.map(&:key)
+    assert_equal ['Inline x'], template.fields.map(&:key)
+  end
+
+  test 'bc. and notextile. signatures are plain text in Redmine, so lists after them are live' do
+    template = parse("bc.. code\n\n* Name: {}\n\nbc. x\n* Other: {}\n")
+    assert_equal ['Name', 'Other'], template.fields.map(&:key)
+  end
+
+  test 'a continuation line inside a list keeps the label path' do
+    template = parse(<<~T)
+      * Passport
+        issued in the country
+      ** Series: {}
+         4 digits
+      ** Number: {}
+      * Abroad
+      ** Series: {}
+    T
+    assert_equal ['Passport_Series', 'Passport_Number', 'Abroad_Series'], template.fields.map(&:key)
+    assert template.fields.all?(&:valid?)
+  end
+
+  test 'a placeholder on a continuation line belongs to the item' do
+    template = parse("* Series:\n  {}\n* Number: {}\n")
+    assert_equal ['Series', 'Number'], template.fields.map(&:key)
+  end
+
+  test 'a blank line ends the list' do
+    template = parse("* Passport\n\n** Series: {}\n")
+    assert_equal ['Series'], template.fields.map(&:key)
+  end
+
+  test 'colons inside Textile markup do not cut the label' do
+    template = parse(<<~T)
+      * %{color:red}Series%: {}
+      * *{color:blue}Number*: {}
+      * "Manual":https://wiki.example.com/doc: {}
+      * Humidity, %: {}
+    T
+    assert_equal ['Series', 'Number', 'Manual', 'Humidity, %'], template.fields.map(&:key)
   end
 
   test 'several auto placeholders in one item are a problem' do
@@ -121,6 +155,17 @@ class RedmineIssueForms::TemplateTest < ActiveSupport::TestCase
     assert_equal 1, table.template_row_count
   end
 
+  test 'compact cells as inserted by the Table toolbar button' do
+    table = parse("*T*\n\n|_.A|_.B|_.C|\n|x|||\n|\\3.Add rows|\n").form_tables.first
+    assert_equal ['A', 'B', 'C'], table.columns
+    assert table.tail?
+    assert_equal [false, true, true], table.rows[0].cells.map(&:input?)
+  end
+
+  test 'only a leading underscore makes a header cell' do
+    assert_empty parse("*T*\n\n|(my_class). A |_. B |\n").tables
+  end
+
   test 'wiki links with a pipe do not split cells' do
     table = parse("*T*\n\n|_. A |_. B |\n| [[Page|Title]] | |\n").form_tables.first
     assert_equal '[[Page|Title]]', table.rows[0].cells[0].content
@@ -145,6 +190,18 @@ class RedmineIssueForms::TemplateTest < ActiveSupport::TestCase
     template = parse("*T*\n|_. A |\n\n*T*\n|_. B |\n")
     assert_equal [:duplicate_table, :duplicate_table], template.tables.map { |t| t.problem&.code }
     assert_empty template.form_tables
+  end
+
+  test 'huge labels, deep lists and many placeholders stay fast' do
+    [
+      "* #{'-+' * 30_000}- {}\n",
+      "*#{'*' * 20_000} #{'{} ' * 6000}\n",
+      "*#{'-+' * 30_000}-*\n\n|_. A |\n"
+    ].each do |text|
+      started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      parse(text)
+      assert_operator Process.clock_gettime(Process::CLOCK_MONOTONIC) - started, :<, 1.0
+    end
   end
 
   test 'CRLF line endings' do

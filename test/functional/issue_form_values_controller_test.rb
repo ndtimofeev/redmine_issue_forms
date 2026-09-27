@@ -57,13 +57,22 @@ class IssueFormValuesControllerTest < Redmine::ControllerTest
     assert_redirected_to "/issues/#{@issue.id}#issue_description_wiki"
   end
 
-  test 'conflict warning is escaped' do
-    @issue.update_columns(description: "* <b>Date</b>: {}\n")
+  test 'conflict warning is escaped and repeats what was typed' do
+    @issue.update_columns(description: "* Date: {<b>Date</b>}\n")
     add_note(@issue, '<b>Date</b> : theirs')
     assert_no_difference 'Journal.count' do
-      post_values(Keys.field_id('<b>Date</b>') => 'mine')
+      post_values(Keys.field_id('<b>Date</b>') => '<i>mine</i>')
     end
     assert_includes flash[:warning], '&lt;b&gt;Date&lt;/b&gt;'
+    assert_includes flash[:warning], '&lt;i&gt;mine&lt;/i&gt;'
+    assert_nil flash[:notice] # no "nothing to save" next to the warning
+  end
+
+  test 'rejected values are repeated back briefly' do
+    values = (1..30).to_h { |i| ["ifv-#{format('%016x', i)}", 'x' * 5000] }
+    post_values(values)
+    assert_operator flash[:warning].size, :<, 2000
+    assert_includes flash[:warning], '...'
   end
 
   test 'requires add_issue_notes' do
@@ -98,6 +107,40 @@ class IssueFormValuesControllerTest < Redmine::ControllerTest
     Setting.text_formatting = 'common_mark'
     post_values(Keys.field_id('Date') => 'x')
     assert_response :not_found
+  end
+
+  test 'the pencil saves what was typed and opens the value for editing' do
+    add_note(@issue, 'T : B : 0 : old')
+    cell = Keys.cell_id('T', 'B', 0)
+    assert_difference 'Journal.count', 1 do
+      post :create, params: { id: @issue.id, issue_form: { values: { Keys.field_id('Date') => 'today' }, open: cell } }
+    end
+    assert_equal 'Date : today', Journal.order(:id).last.notes
+    assert_redirected_to "/issues/#{@issue.id}?issue_form_edit=#{cell}##{cell}"
+  end
+
+  test 'the pencil with nothing typed just opens the value' do
+    cell = Keys.cell_id('T', 'B', 0)
+    assert_no_difference 'Journal.count' do
+      post :create, params: { id: @issue.id, issue_form: { values: {}, open: cell } }
+    end
+    assert_redirected_to "/issues/#{@issue.id}?issue_form_edit=#{cell}##{cell}"
+    assert_nil flash[:notice]
+  end
+
+  test 'Cancel leaves the opened value alone and saves the rest' do
+    add_note(@issue, 'Date : old')
+    date = Keys.field_id('Date')
+    post :create, params: { id: @issue.id, issue_form: {
+      values: { date => 'changed', Keys.cell_id('T', 'B', 0) => 'b0' }, edited: [date], cancel: date
+    } }
+    assert_equal 'T : B : 0 : b0', Journal.order(:id).last.notes
+    assert_redirected_to "/issues/#{@issue.id}##{Keys.cell_id('T', 'B', 0)}"
+  end
+
+  test 'open and cancel must be field ids' do
+    post :create, params: { id: @issue.id, issue_form: { values: {}, open: 'x" onclick="alert(1)' } }
+    assert_redirected_to "/issues/#{@issue.id}#issue_description_wiki"
   end
 
   test 'malformed params are ignored' do

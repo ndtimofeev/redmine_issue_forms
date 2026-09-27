@@ -30,15 +30,39 @@ class RedmineIssueForms::FormTest < ActiveSupport::TestCase
     assert_nil f.field_value(field(f, 'Resp'))
   end
 
-  test 'keys are matched ignoring case and extra whitespace, colons without spaces work' do
-    f = form(['passport_series:  4512 : 7'])
+  test 'keys are matched ignoring case and extra whitespace' do
+    f = form(['passport_series   :  4512 : 7'])
     assert_equal '4512 : 7', f.field_value(field(f, 'Passport_Series')).value
   end
 
+  test 'the colon needs a space before it, so prose is not a value' do
+    f = form(['Resp : Ann', "Checked.\nResp: all fine, call at 10:30", 'Acceptance: done at 10:30'])
+    assert_equal 'Ann', f.field_value(field(f, 'Resp')).value
+    assert_empty f.orphans
+  end
+
   test 'lines that are not form values are ignored' do
-    f = form(["Hello: world\nhttp://example.com\n\nAcceptance : done"])
+    f = form(["Hello : world\nhttp://example.com\n\nAcceptance : done"])
     assert_nil f.field_value(field(f, 'Passport_Series'))
     assert_empty f.orphans
+  end
+
+  test 'quoted lines are ignored' do
+    f = form(['Resp : Ann', "Ivan wrote:\n> Resp : Bob\n\nAgreed."])
+    assert_equal 'Ann', f.field_value(field(f, 'Resp')).value
+  end
+
+  test 'values for keys the template no longer has are orphans' do
+    f = form([
+      'Pasport_Series : 4512',        # a label was renamed since
+      'Old : 1',
+      'Old : 2',                      # last one wins
+      "Gone : x\nGone :",             # cleared again
+      "Looked at it.\nNote : later",  # a sentence among other text
+      'Items : Qty : 0 : 5'           # a table that was renamed
+    ])
+    assert_equal ['Pasport_Series : 4512', 'Old : 2', 'Items : Qty : 0 : 5'], f.orphans.map(&:line)
+    assert_equal [:unknown_key, :unknown_key, :unknown_table], f.orphans.map(&:reason)
   end
 
   test 'table cells, extra rows and the next row index' do
@@ -59,6 +83,34 @@ class RedmineIssueForms::FormTest < ActiveSupport::TestCase
       "Acceptance : Qty : #{RedmineIssueForms::MAX_TABLE_ROWS} : x"
     ])
     assert_equal [:unknown_column, :static_cell, :bad_cell_address, :row_limit], f.orphans.map(&:reason)
+  end
+
+  test 'wide tables get fewer rows' do
+    columns = (1..100).map { |i| "|_. C#{i} " }.join
+    template = RedmineIssueForms::Template.parse("*W*\n\n#{columns}|\n|\\100. tail |\n")
+    table = template.form_tables.first
+    limit = RedmineIssueForms::MAX_TABLE_CELLS / 100
+    f = RedmineIssueForms::Form.new(template, [[1, "W : C1 : #{limit} : x"]])
+    assert_equal limit, f.row_limit(table)
+    assert_equal [:row_limit], f.orphans.map(&:reason)
+  end
+
+  test 'reading a huge comment is linear' do
+    template = RedmineIssueForms::Template.parse((1..300).map { |i| "* F#{i}: {}" }.join("\n"))
+    [("x : y\n" * 250_000), "a#{' ' * 500_000}b\n", "a#{" \t" * 250_000}:b"].each do |note|
+      started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      RedmineIssueForms::Form.new(template, [[1, note]])
+      assert_operator Process.clock_gettime(Process::CLOCK_MONOTONIC) - started, :<, 3.0
+    end
+  end
+
+  test 'layout changes when the rows of a table change' do
+    before = form([])
+    table = before.template.form_tables.first
+    inserted = TEMPLATE.sub("| Bolt   | 100   |           |\n", "| Washer |  |  |\n| Bolt   | 100   |           |\n")
+    after = RedmineIssueForms::Form.new(RedmineIssueForms::Template.parse(inserted), [])
+    assert_equal before.layout(table), form(['Resp : x']).layout(table)
+    assert_not_equal before.layout(table), after.layout(after.template.form_tables.first)
   end
 
   test 'a table without a tail keeps its size' do

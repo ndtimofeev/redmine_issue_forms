@@ -37,6 +37,7 @@ class RedmineIssueForms::SubmissionTest < ActiveSupport::TestCase
     s = submit(form([[5, 'Date : theirs']]), { Keys.field_id('Date') => 'mine' })
     assert_empty s.lines
     assert_equal [Keys.field_id('Date')], s.conflicts.map(&:id)
+    assert_equal 'mine', s.typed_value(Keys.field_id('Date'))
   end
 
   test 'the same value filled meanwhile is neither a conflict nor a new line' do
@@ -48,13 +49,39 @@ class RedmineIssueForms::SubmissionTest < ActiveSupport::TestCase
   test 'edit mode overwrites and clears, unless changed after rendering' do
     f = form([[5, 'Date : old']])
     id = Keys.field_id('Date')
-    assert_equal ['Date : new'], submit(f, { id => 'new' }, edited_ids: [id], seen_journal_id: 5).lines
-    assert_equal ['Date :'], submit(f, { id => '' }, edited_ids: [id], seen_journal_id: 5).lines
-    assert_empty submit(f, { id => 'old' }, edited_ids: [id], seen_journal_id: 5).lines
+    assert_equal ['Date : new'], submit(f, { id => 'new' }, originals: { id => 'old' }).lines
+    assert_equal ['Date :'], submit(f, { id => '' }, originals: { id => 'old' }).lines
+    assert_empty submit(f, { id => 'old' }, originals: { id => 'old' }).lines
 
-    stale = submit(f, { id => 'new' }, edited_ids: [id], seen_journal_id: 4)
-    assert_empty stale.lines
-    assert_equal [id], stale.conflicts.map(&:id)
+    changed = submit(f, { id => 'new' }, originals: { id => 'older' })
+    assert_empty changed.lines
+    assert_equal [id], changed.conflicts.map(&:id)
+  end
+
+  test 'edit mode left untouched never undoes what others did meanwhile' do
+    id = Keys.field_id('Date')
+    # cleared, edited, deleted (an older value shows again) by someone else
+    [[[5, 'Date : old'], [6, 'Date :']], [[5, 'Date : corrected']], [[3, 'Date : older']]].each do |notes|
+      s = submit(form(notes), { id => 'old', Keys.field_id('Owner') => 'Ann' }, originals: { id => 'old' })
+      assert_equal ['Owner : Ann'], s.lines
+      assert_empty s.conflicts
+    end
+    # but a real change on top of someone else's is a conflict
+    s = submit(form([[5, 'Date : old'], [6, 'Date :']]), { id => 'new' }, originals: { id => 'old' })
+    assert_empty s.lines
+    assert_equal [id], s.conflicts.map(&:id)
+  end
+
+  test 'cells of a table whose rows changed after rendering are stale' do
+    f = form
+    table = f.template.form_tables.first
+    cell = Keys.cell_id('T', 'B', 0)
+    layouts = { Keys.table_id('T') => f.layout(table) }
+    assert_equal ['T : B : 0 : b'], submit(f, { cell => 'b' }, layouts: layouts).lines
+
+    moved = submit(f, { cell => 'b', Keys.new_cell_id('T', 'A') => 'a' }, layouts: { Keys.table_id('T') => 'other' })
+    assert_equal ['T : A : 1 : a'], moved.lines
+    assert_equal [cell], moved.stale
   end
 
   test 'new row cells get the next row index' do
@@ -75,8 +102,9 @@ class RedmineIssueForms::SubmissionTest < ActiveSupport::TestCase
 
   test 'a full table refuses new rows' do
     f = form([[1, "T : B : #{RedmineIssueForms::MAX_TABLE_ROWS - 1} : y"]])
-    s = submit(f, { Keys.new_cell_id('T', 'A') => 'a' })
+    s = submit(f, { Keys.new_cell_id('T', 'B') => 'b', Keys.new_cell_id('T', 'A') => 'a' })
     assert_empty s.lines
     assert_equal ['T'], s.full_tables.map(&:name)
+    assert_equal %w[a b], s.rejected_row(s.full_tables.first)
   end
 end

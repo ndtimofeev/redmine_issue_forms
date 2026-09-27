@@ -41,6 +41,12 @@ module RedmineIssueForms
       "ifv-#{digest('new', normalize(table_name), normalize(column_name))}"
     end
 
+    # Name of the hidden field that carries a form table's layout at render
+    # time (see Form#layout).
+    def table_id(table_name)
+      "ifv-#{digest('table', normalize(table_name))}"
+    end
+
     def digest(*parts)
       Digest::SHA256.hexdigest(parts.join("\u0000"))[0, 16]
     end

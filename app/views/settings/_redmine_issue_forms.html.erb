@@ -2,6 +2,12 @@
     hidden value makes unchecking every tracker save an empty list instead
     of keeping the old one; RedmineIssueForms.tracker_ids drops it. %>
 <% selected = RedmineIssueForms.tracker_ids %>
+<% unless RedmineIssueForms.textile? %>
+  <%# With another text formatting the plugin does nothing at all (see
+      RedmineIssueForms::SUPPORTED_TEXT_FORMATTING); say so where the
+      forms are set up, rather than leave people wondering. %>
+  <div class="flash warning"><%= l(:text_issue_forms_not_textile, formatting: Setting.text_formatting.presence || '-') %></div>
+<% end %>
 <p>
   <label><%= l(:label_issue_forms_trackers) %></label>
   <%= hidden_field_tag 'settings[tracker_ids][]', '', id: nil %>

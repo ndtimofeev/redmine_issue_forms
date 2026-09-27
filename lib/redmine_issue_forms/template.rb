@@ -149,8 +149,8 @@ module RedmineIssueForms
       end
 
       def column_index(column_name)
-        wanted = Keys.normalize(column_name)
-        columns.index { |column| Keys.normalize(column) == wanted }
+        @column_indexes ||= columns.each_with_index.to_h { |column, index| [Keys.normalize(column), index] }
+        @column_indexes[Keys.normalize(column_name)]
       end
     end
 
@@ -168,16 +168,43 @@ module RedmineIssueForms
     # A paragraph made of nothing but bold text: "*Name*" or "**Name**".
     TABLE_NAME = /\A(\*{1,2})(?![[:space:]*])(.+?)(?<![[:space:]*])\1[[:blank:]]*\z/
 
-    # Textile cell attributes: "_" header, "\N" colspan, "/N" rowspan,
-    # alignment, {style}, (class), [lang] - followed by ". " or ".<eol>".
-    CELL_ATTRIBUTES = /\A((?:_|\\\d+|\/\d+|<>|[<>=^~]|\{[^}]*\}|\([^)]*\)|\[[^\]]*\])+)\.(?=[[:blank:]]|\z)/
+    # Textile cell modifiers, copied from Redmine's own RedCloth3
+    # (lib/redmine/wiki_formatting/textile/redcloth3.rb: A_HLGN ... C and
+    # the cell regex in #block_textile_table) so that a cell is a header,
+    # a colspan or plain text for the plugin exactly when it is for the
+    # renderer: "_" header, "\N" colspan, "/N" rowspan, alignment,
+    # (class), {style}, [lang], then "." and an optional single space -
+    # "|_.Name|" (what the editor's Table button inserts) is a header too.
+    # RedCloth's A_HLGN is "(?:(?:<>|<|>|=|[()]+)+)" and is only ever used
+    # as optional ("A_HLGN?"); this is the same thing written without the
+    # nested repeat Ruby warns about.
+    CELL_A_HLGN_OPT = '(?:<>|<|>|=|[()])*'
+    CELL_A_VLGN = '[\-^~]'
+    CELL_C_CLAS = '(?:\([^")]+\))'
+    CELL_C_LNGE = '(?:\[[a-z\-_]+\])'
+    CELL_C_STYL = '(?:\{[^{][^"}]+\})'
+    CELL_S_CSPN = '(?:\\\\\d+)'
+    CELL_S_RSPN = '(?:/\d+)'
+    CELL_A = "(?:#{CELL_A_HLGN_OPT}#{CELL_A_VLGN}?|#{CELL_A_VLGN}?#{CELL_A_HLGN_OPT})".freeze
+    CELL_S = "(?:#{CELL_S_CSPN}?#{CELL_S_RSPN}|#{CELL_S_RSPN}?#{CELL_S_CSPN}?)".freeze
+    CELL_C = "(?:#{CELL_C_CLAS}?#{CELL_C_STYL}?#{CELL_C_LNGE}?|#{CELL_C_STYL}?#{CELL_C_LNGE}?#{CELL_C_CLAS}?|" \
+             "#{CELL_C_LNGE}?#{CELL_C_STYL}?#{CELL_C_CLAS}?)".freeze
+    CELL_ATTRIBUTES = /\A(_?#{CELL_S}#{CELL_A}#{CELL_C})\. ?/
 
-    # First line of a Textile block that has explicit signature, used to
-    # find where an extended "bc.." / "pre.." block ends.
-    BLOCK_SIGNATURE = /\A(?:p|h[1-6]|bq|bc|pre|notextile|fn\d+|table)(?:\([^)]*\)|\{[^}]*\}|\[[^\]]*\]|[<>=]+)*\.{1,2}(?:[[:blank:]]|\z)/
-    CODE_BLOCK_START = /\A(bc|pre|notextile)(?:\([^)]*\)|\{[^}]*\}|\[[^\]]*\])*\.(\.)?(?:[[:blank:]]|\z)/
-    PRE_OPEN = /<(pre|notextile)\b[^>]*>/i
-    PRE_CLOSE = %r{</(pre|notextile)>}i
+    # Regions Redmine's RedCloth3 leaves unformatted (its OFFTAGS). Redmine
+    # has no bc./pre./notextile. block signatures - they render as plain
+    # paragraph text - so only these tags hide placeholders.
+    PRE_OPEN = /<(pre|code|kbd|notextile)\b[^>]*>/i
+    PRE_CLOSE = %r{</(pre|code|kbd|notextile)>}i
+
+    # Deeper list markers are not treated as list items: nobody writes a
+    # form 20 levels deep, and it bounds the work per line.
+    MAX_LIST_DEPTH = 10
+
+    # Longer labels are cut before cleaning - a key is typed by hand in
+    # comments, nothing that long is a real label, and it keeps the
+    # cleaning linear in the size of the description.
+    MAX_LABEL_LENGTH = 200
 
     def self.parse(text)
       new(text)
@@ -197,12 +224,14 @@ module RedmineIssueForms
 
     # Tables that are forms and have no problem - the only ones the
     # renderer turns into inputs and the only ones comments can fill.
+    # Memoized: the template never changes after #initialize (problems are
+    # all assigned there), and Form looks these up once per comment line.
     def form_tables
-      tables.select(&:valid?)
+      @form_tables ||= tables.select(&:valid?)
     end
 
     def valid_fields
-      fields.select(&:valid?)
+      @valid_fields ||= fields.select(&:valid?)
     end
 
     def empty?
@@ -210,58 +239,37 @@ module RedmineIssueForms
     end
 
     def table_named(name)
-      wanted = Keys.normalize(name)
-      form_tables.find { |table| table.normalized_name == wanted }
+      @tables_by_name ||= form_tables.index_by(&:normalized_name)
+      @tables_by_name[Keys.normalize(name)]
     end
 
     def field_for_key(key)
-      wanted = Keys.normalize(key)
-      valid_fields.find { |field| field.normalized_key == wanted }
+      @fields_by_key ||= valid_fields.index_by(&:normalized_key)
+      @fields_by_key[Keys.normalize(key)]
     end
 
     private
 
     # --- code blocks -------------------------------------------------------
 
-    # Line indexes that belong to <pre>/<notextile> sections or bc./pre./
-    # notextile. blocks. A "{}" or a table in there is sample text, not a
-    # form, and must be left alone.
+    # Line indexes inside a multi-line <pre>, <code>, <kbd> or <notextile>
+    # region - what Redmine's RedCloth3 leaves unformatted. A "{}" or a
+    # table in there is sample text, not a form, and must be left alone.
+    # A tag opened and closed on the same line doesn't hide the line: that
+    # is inline code inside ordinary text.
     def code_line_indexes
       skipped = Set.new
-      mode = nil # nil, :tag, :block (until blank line), :extended (until next signature)
+      open_tag = false
 
       lines.each_with_index do |line, index|
-        case mode
-        when :tag
+        if open_tag
           skipped << index
-          mode = nil if PRE_CLOSE.match?(line)
-          next
-        when :block
-          if line.strip.empty?
-            mode = nil
-          else
+          open_tag = false if PRE_CLOSE.match?(line)
+        elsif (position = line =~ PRE_OPEN)
+          unless PRE_CLOSE.match?(line[position..])
             skipped << index
-            next
+            open_tag = true
           end
-        when :extended
-          previous_blank = index.positive? && lines[index - 1].strip.empty?
-          if previous_blank && BLOCK_SIGNATURE.match?(line)
-            mode = nil
-          else
-            skipped << index
-            next
-          end
-        end
-
-        if (m = CODE_BLOCK_START.match(line))
-          skipped << index
-          mode = m[2] ? :extended : :block
-        elsif PRE_OPEN.match?(line)
-          skipped << index
-          # An opening tag with its closing tag later on the same line is a
-          # one-line block; otherwise everything up to the closing tag is.
-          after_open = line[(line =~ PRE_OPEN)..]
-          mode = :tag unless PRE_CLOSE.match?(after_open)
         end
       end
 
@@ -347,8 +355,8 @@ module RedmineIssueForms
         return Problem.new(:table_empty_column, table: table.name) if column.empty?
         return Problem.new(:table_column_colon, table: table.name, column: column) if column.include?(':')
       end
-      normalized = table.columns.map { |column| Keys.normalize(column) }
-      duplicate = normalized.detect { |column| normalized.count(column) > 1 }
+      counts = table.columns.map { |column| Keys.normalize(column) }.tally
+      duplicate = counts.find { |_, count| count > 1 }&.first
       return Problem.new(:table_duplicate_column, table: table.name, column: duplicate) if duplicate
 
       table.rows.each_with_index do |row, row_index|
@@ -372,7 +380,7 @@ module RedmineIssueForms
         span = 1 if span < 1
         cell = Cell.new(
           prefix: prefix, content: content.strip, column: column, span: span,
-          header: prefix.include?('_'), rowspan: prefix.match?(%r{/\d})
+          header: prefix.start_with?('_'), rowspan: prefix.match?(%r{/\d})
         )
         column += span
         cell
@@ -385,39 +393,59 @@ module RedmineIssueForms
     def parse_fields
       table_lines = Set.new
       tables.each { |table| (table.first_line_index..table.last_line_index).each { |i| table_lines << i } }
-      labels = [] # labels of the current item's ancestors, by level
+      labels = [] # labels of the current item and its ancestors, by level
+      item_auto_fields = [] # "{}" fields of the current item, continuation lines included
 
       lines.each_with_index do |line, index|
-        m = LIST_ITEM.match(line)
-        if m.nil? || skipped?(index) || table_lines.include?(index)
+        # Textile ends a list only at a blank line (or at something that
+        # isn't text at all). A non-bullet line right after an item is a
+        # continuation of that item - rendered inside its <li> - so it
+        # keeps the label path, and so do the bullets that follow it.
+        if line.strip.empty? || skipped?(index) || table_lines.include?(index)
           labels = []
+          item_auto_fields = []
           next
         end
 
-        level = m[1].length
-        text = m[2]
-        offset = m.begin(2)
-        label = item_label(text)
-        labels = labels.first(level - 1)
-        labels.fill('', labels.size...(level - 1))
-        labels << label
-
-        auto_placeholders = []
-        text.to_enum(:scan, PLACEHOLDER).each do
-          match = Regexp.last_match
-          key = placeholder_key(match[1])
-          next if key == :not_a_placeholder
-
-          field = Field.new(
-            key: key || auto_key(labels), line_index: index,
-            start: offset + match.begin(0), length: match[0].length, source: match[0]
-          )
-          auto_placeholders << field if key.nil?
-          @fields << field
+        m = LIST_ITEM.match(line)
+        if m && m[1].length <= MAX_LIST_DEPTH
+          level = m[1].length
+          text = m[2]
+          offset = m.begin(2)
+          labels = labels.first(level - 1)
+          labels.fill('', labels.size...(level - 1))
+          labels << item_label(text)
+          item_auto_fields = []
+        elsif labels.any?
+          text = line
+          offset = 0
+        else
+          next # ordinary paragraph text: placeholders only count in lists
         end
 
-        if auto_placeholders.size > 1
-          auto_placeholders.each { |field| field.problem = Problem.new(:several_auto_keys, key: field.key) }
+        collect_placeholders(text, offset, index, auto_key(labels), item_auto_fields)
+      end
+    end
+
+    # Adds a Field for every placeholder in +text+ (which starts at column
+    # +offset+ of line +line_index+). +auto_key+ is computed once per line
+    # by the caller - every "{}" of an item gets the same one.
+    def collect_placeholders(text, offset, line_index, auto_key, item_auto_fields)
+      text.to_enum(:scan, PLACEHOLDER).each do
+        match = Regexp.last_match
+        key = placeholder_key(match[1])
+        next if key == :not_a_placeholder
+
+        field = Field.new(
+          key: key || auto_key, line_index: line_index,
+          start: offset + match.begin(0), length: match[0].length, source: match[0]
+        )
+        @fields << field
+        next unless key.nil?
+
+        item_auto_fields << field
+        if item_auto_fields.size > 1
+          item_auto_fields.each { |f| f.problem = Problem.new(:several_auto_keys, key: f.key) }
         end
       end
     end
@@ -434,8 +462,12 @@ module RedmineIssueForms
       stripped
     end
 
+    # The item's visible text up to the first ":" - Textile markup is taken
+    # out first, so a colon inside a style ("%{color:red}Series%: {}") or a
+    # link URL ("\"Doc\":https://wiki/x: {}") doesn't cut the label.
     def item_label(text)
       plain = text.gsub(PLACEHOLDER) { |match| placeholder_key(Regexp.last_match(1)) == :not_a_placeholder ? match : '' }
+      plain = Template.strip_inline_markup(plain)
       head = plain.include?(':') ? plain.split(':', 2).first : plain
       Template.clean_label(head)
     end
@@ -516,12 +548,27 @@ module RedmineIssueForms
 
     # Plain text of a label: whitespace collapsed, surrounding Textile
     # emphasis ("*bold*", "_italic_", "+ins+", "@code@", "-del-") removed.
+    #
+    # The text is cut to MAX_LABEL_LENGTH first: each round of the loop
+    # rescans the label, so without the cut a huge one-line "label" would
+    # make every render of the issue quadratic in its length.
     def self.clean_label(text)
-      label = text.to_s.gsub(/[[:space:]]+/, ' ').strip
+      label = text.to_s[0, MAX_LABEL_LENGTH * 4].gsub(/[[:space:]]+/, ' ').strip[0, MAX_LABEL_LENGTH].strip
       while (m = label.match(/\A([*_+@-]{1,2})(.+?)\1\z/))
         label = m[2].strip
       end
       label
+    end
+
+    # Visible text of Textile inline markup that can hide a ":" - links
+    # ("text":url, "text(title)":url) become their text, styled spans
+    # (%{color:red}text%) their text, style blocks after phrase modifiers
+    # (*{color:red}bold*) and inline HTML tags (<code>) disappear.
+    def self.strip_inline_markup(text)
+      text.gsub(/<[^<>]*>/, '')
+          .gsub(/"([^"]+?)(?:\([^()]*\))?":(?:\S*[^\s:])/, '\\1')
+          .gsub(/%(?:\{[^{}]*\}|\([^()]*\)|\[[^\[\]]*\])+([^%]*)%/, '\\1')
+          .gsub(/\{[^{}]*[:;][^{}]*\}/, '')
     end
   end
 end
