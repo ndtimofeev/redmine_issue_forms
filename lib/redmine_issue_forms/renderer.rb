@@ -33,13 +33,18 @@ module RedmineIssueForms
     # lost without a word when someone presses a check mark. This asks
     # first, with core's own message and only when core would have warned
     # (the message global exists only if the user's preference is on).
-    # stopPropagation keeps the submit from reaching core's and rails-ujs'
+    # stopImmediatePropagation keeps a cancelled submit from reaching the
+    # other submit handlers: rails-ujs' (on document), which would disable
+    # every button, and core's double-submit guard
+    # (addFormObserversForDoubleSubmit, bound to this same form), which
+    # would take the cancelled submit for a first one and block every
+    # later one. The inline handler runs before both.
     # handlers when the person chooses to stay. Without JavaScript the
     # attribute does nothing.
     UNSAVED_TEXT_GUARD =
       "if (window.warnLeavingUnsavedMessage && window.jQuery && " \
       "$('textarea').filter(function() { return $(this).data('changed'); }).length > 0 && " \
-      "!confirm(window.warnLeavingUnsavedMessage)) { event.stopPropagation(); return false; }".freeze
+      "!confirm(window.warnLeavingUnsavedMessage)) { event.stopImmediatePropagation(); return false; }".freeze
 
     # +view+ is the view context textilizable was called on.
     def initialize(view, issue)
@@ -58,7 +63,7 @@ module RedmineIssueForms
       template = Template.parse(@issue.description)
       return nil if template.empty?
 
-      @form = Form.new(template, Form.notes_for(@issue))
+      @form = Form.new(template, Form.notes_for(@issue), former_names: -> { Form.former_names_for(@issue) })
       html = substitute_markers(yield(build_source).to_str)
       html = html.html_safe # rubocop:disable Rails/OutputSafety - every inserted piece is built with escaping helpers below
 
@@ -119,34 +124,50 @@ module RedmineIssueForms
     # Swaps markers for our HTML, in one pass per step so nothing inserted
     # is ever scanned again.
     #
-    # Textile and Redmine can copy a marker into a tag - "{}@corp.ru" is
-    # auto-linked as an e-mail, "https://crm/orders/{}" as a URL - often in
-    # both the href and the link text. Inside a tag only the plain text
-    # may go (the value, or "{}"); a field caught this way gets no input
-    # anywhere, since an input inside a link can't work, and people who
-    # can fill the form are told to put spaces around it (#notes_block).
-    # A marker that appears twice in text gets its HTML once and the plain
-    # text after that, so no id is ever duplicated.
+    # Textile and Redmine can put a marker where HTML can't go: into a
+    # tag - "{}@corp.ru" is auto-linked as an e-mail, "https://crm/{}" as a
+    # URL, often in both the href and the link text - or into the text of
+    # a link ("\"{}\":https://crm/"), where clicking the input would follow
+    # the link. There only the plain text may go (the value, or "{}"); a
+    # field caught this way gets no input anywhere, and people who can
+    # fill the form are told why (#notes_block). A marker that appears
+    # twice in text gets its HTML once and the plain text after that, so
+    # no id is ever duplicated.
+    #
+    # Two passes over the same tokens (tags and markers): the first finds
+    # the caught markers, wherever their other copies are; the second
+    # swaps every marker.
     def substitute_markers(html)
       html = pin_rows(html)
-      pattern = /ifm#{@nonce}n(\d+)z/
+      marker = /ifm#{@nonce}n(\d+)z/
+      token = /<[^>]*>|#{marker}/
+
       @caught_in_tags = Set.new
-      html = html.gsub(/<[^>]*>/) do |tag|
-        tag.gsub(pattern) do
-          index = Regexp.last_match(1).to_i
-          @caught_in_tags << index
-          ERB::Util.h(@markers[index][1])
+      link_depth = 0
+      html.scan(token) do
+        piece = Regexp.last_match(0)
+        index = Regexp.last_match(1)
+        if piece.start_with?('<')
+          piece.scan(marker) { @caught_in_tags << Regexp.last_match(1).to_i }
+          if piece.match?(/\A<a[\s>]/i)
+            link_depth += 1
+          elsif piece.match?(%r{\A</a\s*>}i) && link_depth.positive?
+            link_depth -= 1
+          end
+        elsif link_depth.positive?
+          @caught_in_tags << index.to_i
         end
       end
 
       used = Set.new
-      html.gsub(pattern) do
-        index = Regexp.last_match(1).to_i
-        html_piece, plain, = @markers[index]
-        if @caught_in_tags.include?(index) || !used.add?(index)
-          ERB::Util.h(plain)
+      html.gsub(token) do
+        piece = Regexp.last_match(0)
+        index = Regexp.last_match(1)
+        if piece.start_with?('<')
+          piece.gsub(marker) { ERB::Util.h(@markers[Regexp.last_match(1).to_i][1]) }
         else
-          html_piece
+          html_piece, plain, = @markers[index.to_i]
+          @caught_in_tags.include?(index.to_i) || !used.add?(index.to_i) ? ERB::Util.h(plain) : html_piece
         end
       end
     end

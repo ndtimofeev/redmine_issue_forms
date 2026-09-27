@@ -204,6 +204,56 @@ class RedmineIssueForms::TemplateTest < ActiveSupport::TestCase
     end
   end
 
+  test 'many placeholders in one item, long non-ASCII lines and markup-heavy labels stay fast' do
+    [
+      "* A: #{'{}' * 8000}\n",                        # was quadratic re-marking of several_auto_keys
+      "* A: {}\n#{"{} x\n" * 4000}",                  # the same across continuation lines
+      "* Дата: #{'{ж} ' * 50_000}\n",                 # character offsets on a Cyrillic line
+      "* A%#{'()' * 50_000}: {}\n",                    # %...% styling without regex memoization
+      "* A{#{'a:' * 25_000}\n",
+      "* Дата: #{'<code>ж ' * 20_000}{}\n"            # inline code regions
+    ].each do |text|
+      started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      parse(text)
+      assert_operator Process.clock_gettime(Process::CLOCK_MONOTONIC) - started, :<, 1.0, text[0, 20]
+    end
+  end
+
+  test 'placeholder offsets are character offsets on non-ASCII lines' do
+    line = '* Дата ж: {} и {Б} <code>{}</code> ё {В}'
+    fields = parse(line).fields
+    assert_equal ['{}', '{Б}', '{В}'], fields.map { |field| line[field.start, field.length] }
+  end
+
+  test 'a quote ends a list, as in Textile' do
+    assert_equal ['Серия'], parse("* Паспорт\n> Только оригинал!\n** Серия: {}\n").fields.map(&:key)
+
+    template = parse("* Дата: {}\n> Формат ДД.ММ.ГГГГ, например {}\n")
+    assert_equal ['Дата'], template.fields.map(&:key)
+    assert template.fields.first.valid?
+  end
+
+  test 'placeholders inside inline pre, code, kbd and notextile are left alone' do
+    assert_empty parse("* Ключ задаётся так: <notextile>{Ключ}</notextile>\n").fields
+    template = parse("* A: <pre>{}</pre> {} <CODE>{x}</code>\n")
+    assert_equal ['A'], template.fields.map(&:key)
+    assert template.fields.first.valid?
+  end
+
+  test 'comparison signs in labels are text, not tags' do
+    template = parse("* Insulation (R < 10 MOhm at U > 500 V): {}\n* Insulation (R < 20 MOhm at U > 500 V): {}\n" \
+                     "* <code>Code</code> name: {}\n")
+    assert_equal ['Insulation (R < 10 MOhm at U > 500 V)', 'Insulation (R < 20 MOhm at U > 500 V)', 'Code name'],
+                 template.fields.map(&:key)
+    assert template.fields.all?(&:valid?)
+  end
+
+  test 'a key or table name starting with ">" is a problem: its comment line would be a quote' do
+    template = parse("* >5 min: {}\n* Other: {>x}\n* Fine: {}\n\n*>T*\n\n|_. A |\n| |\n")
+    assert_equal [:key_quote, :key_quote, nil], template.fields.map { |field| field.problem&.code }
+    assert_equal :table_name_quote, template.tables.first.problem.code
+  end
+
   test 'CRLF line endings' do
     template = parse("* Date: {}\r\n* Owner: {}\r\n")
     assert_equal ['Date', 'Owner'], template.fields.map(&:key)

@@ -22,13 +22,20 @@
    see Renderer#edit_button) drawn like the links they used to be. */
 .wiki button.issue-form-edit,
 .wiki button.issue-form-cancel {
+  height: auto; /* core gives submit buttons 28px */
   margin: 0;
   padding: 0;
   border: 0;
   background: none;
   box-shadow: none;
   font: inherit;
+  line-height: inherit;
   cursor: pointer;
+}
+
+.wiki button.issue-form-edit:hover,
+.wiki button.issue-form-cancel:hover {
+  background: none;
 }
 
 .wiki button.issue-form-cancel {
@@ -47,14 +54,20 @@
 }
 
 /* The invisible first button that Enter presses (Renderer#default_button).
-   Moved off screen rather than display:none, so every browser still
-   treats it as the form's default button. */
+   Clipped to nothing rather than display:none, so every browser still
+   treats it as the form's default button; and not moved off screen, which
+   in right-to-left languages would add a page-wide horizontal scroll. */
 .wiki .issue-form-default {
   position: absolute;
-  left: -10000px;
   width: 1px;
   height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
   overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .wiki .issue-form-edit:hover,

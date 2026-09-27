@@ -100,6 +100,32 @@ class RedmineIssueForms::SubmissionTest < ActiveSupport::TestCase
     assert_equal ['ifv-deadbeef'], s.stale
   end
 
+  test 'an opened value whose cell moved is stale only if it was changed' do
+    f = form([[1, 'T : B : 0 : 100']])
+    cell = Keys.cell_id('T', 'B', 0)
+    moved = { Keys.table_id('T') => 'other' }
+    untouched = submit(f, { cell => '100', Keys.field_id('Owner') => 'Ann' }, originals: { cell => '100' }, layouts: moved)
+    assert_equal ['Owner : Ann'], untouched.lines
+    assert_empty untouched.stale
+
+    cleared = submit(f, { cell => '' }, originals: { cell => '100' }, layouts: moved)
+    assert_equal [cell], cleared.stale
+    assert_equal '100', cleared.original_value(cell)
+
+    gone = submit(f, { 'ifv-0000000000000000' => '' }, originals: { 'ifv-0000000000000000' => 'x' })
+    assert_equal ['ifv-0000000000000000'], gone.stale
+  end
+
+  test 'layout checks stay linear on big tables' do
+    rows = (0...1000).map { |i| "| r#{i} |  |  |  |" }.join("\n")
+    template = RedmineIssueForms::Template.parse("*Big*\n\n|_. A |_. B |_. C |_. D |\n#{rows}\n")
+    f = RedmineIssueForms::Form.new(template, [])
+    values = f.targets.keys.to_h { |id| [id, ''] }
+    started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    submit(f, values, layouts: { Keys.table_id('Big') => f.layout(template.form_tables.first) })
+    assert_operator Process.clock_gettime(Process::CLOCK_MONOTONIC) - started, :<, 0.5
+  end
+
   test 'a full table refuses new rows' do
     f = form([[1, "T : B : #{RedmineIssueForms::MAX_TABLE_ROWS - 1} : y"]])
     s = submit(f, { Keys.new_cell_id('T', 'B') => 'b', Keys.new_cell_id('T', 'A') => 'a' })

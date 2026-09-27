@@ -68,11 +68,27 @@ class IssueFormValuesControllerTest < Redmine::ControllerTest
     assert_nil flash[:notice] # no "nothing to save" next to the warning
   end
 
-  test 'rejected values are repeated back briefly' do
-    values = (1..30).to_h { |i| ["ifv-#{format('%016x', i)}", 'x' * 5000] }
+  test 'rejected values are repeated back within a small number of bytes' do
+    User.find(2).update!(language: 'ru')
+    rows = (0...12).map { |i| "| Позиция номер #{i} |  |" }.join("\n")
+    @issue.update_columns(description: "*Приёмка партии*\n\n|_. Позиция |_. Замечания и комментарии проверяющего |\n#{rows}\n")
+    add_note(@issue, (0...12).map { |i| "Приёмка партии : Замечания и комментарии проверяющего : #{i} : чужое" }.join("\n"))
+    values = (0...12).to_h { |i| [Keys.cell_id('Приёмка партии', 'Замечания и комментарии проверяющего', i), 'ж' * 80] }
+    values.merge!((1..12).to_h { |i| ["ifv-#{format('%016x', i)}", '<ё>' * 40] })
     post_values(values)
-    assert_operator flash[:warning].size, :<, 2000
-    assert_includes flash[:warning], '...'
+    warning = flash[:warning]
+    assert_operator warning.bytesize, :<=, IssueFormValuesController::FLASH_BYTES
+    assert_includes warning, '...'
+    assert_includes warning, '&lt;ё&gt;'
+    assert_not_includes warning, '&lt;ё&gt...' # never an entity cut in half
+  end
+
+  test 'a cleared value that could not be saved is reported as a clear' do
+    add_note(@issue, 'Date : old')
+    add_note(@issue, 'Date : theirs')
+    date = Keys.field_id('Date')
+    post :create, params: { id: @issue.id, issue_form: { values: { date => '' }, original: { date => 'old' } } }
+    assert_match(/Date \(you cleared it\)/, flash[:warning])
   end
 
   test 'requires add_issue_notes' do
@@ -132,9 +148,10 @@ class IssueFormValuesControllerTest < Redmine::ControllerTest
     add_note(@issue, 'Date : old')
     date = Keys.field_id('Date')
     post :create, params: { id: @issue.id, issue_form: {
-      values: { date => 'changed', Keys.cell_id('T', 'B', 0) => 'b0' }, edited: [date], cancel: date
+      values: { date => 'changed', Keys.cell_id('T', 'B', 0) => 'b0' }, original: { date => 'old' }, cancel: date
     } }
     assert_equal 'T : B : 0 : b0', Journal.order(:id).last.notes
+    assert_nil flash[:warning]
     assert_redirected_to "/issues/#{@issue.id}##{Keys.cell_id('T', 'B', 0)}"
   end
 

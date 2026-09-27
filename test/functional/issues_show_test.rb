@@ -82,6 +82,17 @@ class RedmineIssueForms::IssuesShowTest < Redmine::ControllerTest
     @request.session[:user_id] = 2
     get :show, params: { id: @issue.id }
     assert_select 'form#issue-form-values[onsubmit*=?]', 'warnLeavingUnsavedMessage'
+    assert_select 'form#issue-form-values[onsubmit*=?]', 'event.stopImmediatePropagation()'
+  end
+
+  test 'a placeholder used as link text gets no input and is reported' do
+    @issue.update_columns(description: "* Order: \"{}\":https://crm.example.com/orders/\n* Name: {}\n")
+    @request.session[:user_id] = 2
+    get :show, params: { id: @issue.id }
+    assert_select 'a.external', text: '{}'
+    assert_select 'a input', 0
+    assert_select "input##{Keys.field_id('Name')}"
+    assert_select '.issue-form-problems li', text: /Order/
   end
 
   test 'a full table says so instead of offering a new row' do

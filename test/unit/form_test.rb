@@ -52,17 +52,40 @@ class RedmineIssueForms::FormTest < ActiveSupport::TestCase
     assert_equal 'Ann', f.field_value(field(f, 'Resp')).value
   end
 
-  test 'values for keys the template no longer has are orphans' do
-    f = form([
+  test 'values for keys and tables an earlier template had are orphans' do
+    notes = [
       'Pasport_Series : 4512',        # a label was renamed since
       'Old : 1',
       'Old : 2',                      # last one wins
       "Gone : x\nGone :",             # cleared again
-      "Looked at it.\nNote : later",  # a sentence among other text
+      'Remarque : pièce manquante',   # never a key: prose, even on its own
+      "Checked.\nRatio 1 : 2 : 3 : 4", # never a table
       'Items : Qty : 0 : 5'           # a table that was renamed
-    ])
+    ].each_with_index.map { |note, i| [i + 1, note] }
+    former = -> { Set['pasport_series', 'old', 'gone', 'items'] }
+    f = RedmineIssueForms::Form.new(RedmineIssueForms::Template.parse(TEMPLATE), notes, former_names: former)
     assert_equal ['Pasport_Series : 4512', 'Old : 2', 'Items : Qty : 0 : 5'], f.orphans.map(&:line)
     assert_equal [:unknown_key, :unknown_key, :unknown_table], f.orphans.map(&:reason)
+
+    assert_empty form(notes.map(&:last)).orphans # without a history nothing is taken for a lost value
+  end
+
+  test 'orphans of the same cell replace each other' do
+    f = form(['Acceptance : Nope : 0 : 5', 'Acceptance : Nope : 0 : 6', 'Acceptance : Gone : 0 : 1', 'Acceptance : Gone : 0 :'])
+    assert_equal ['Acceptance : Nope : 0 : 6'], f.orphans.map(&:line)
+  end
+
+  test 'former names come from the description history' do
+    enable_issue_forms
+    issue = form_issue("* Pasport\n** Series: {}\n")
+    issue.init_journal(User.find(1))
+    issue.update!(description: "* Passport\n** Series: {}\n")
+    add_note(issue, 'Pasport_Series : 4512')
+    add_note(issue, 'Remark : prose')
+    f = RedmineIssueForms::Form.for_issue(issue.reload)
+    assert_equal ['Pasport_Series : 4512'], f.orphans.map(&:line)
+  ensure
+    restore_settings
   end
 
   test 'table cells, extra rows and the next row index' do

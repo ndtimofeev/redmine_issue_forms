@@ -63,6 +63,12 @@ module RedmineIssueForms
       @values[id.to_s]
     end
 
+    # The value an input opened with the pencil was showing, nil for
+    # other inputs.
+    def original_value(id)
+      @originals[id.to_s]
+    end
+
     # Tables whose new row couldn't be added because they are full.
     def full_tables
       @full_rows.keys
@@ -94,7 +100,7 @@ module RedmineIssueForms
 
         value = @values[target.id]
         if moved?(target)
-          @stale << target.id unless value.empty?
+          @stale << target.id if changed?(target.id)
         elsif target.kind == :new_cell
           (new_rows[target.table] ||= {})[target.column] = value unless value.empty?
         else
@@ -104,9 +110,17 @@ module RedmineIssueForms
 
       new_rows.each { |table, cells| write_new_row(table, cells) }
 
-      @values.each do |id, value|
-        @stale << id unless targets.key?(id) || value.empty?
+      @values.each_key do |id|
+        @stale << id if !targets.key?(id) && changed?(id)
       end
+    end
+
+    # Whether the person did something with the input +id+: typed into an
+    # empty one, or changed (possibly emptied) one opened with the pencil.
+    # Only that counts as rejected when the place is gone - an opened value
+    # left as it was is not "not saved", and a clear is not "nothing".
+    def changed?(id)
+      @originals.key?(id) ? @values[id] != @originals[id] : !@values[id].empty?
     end
 
     # A cell whose table got different rows after the page was rendered.

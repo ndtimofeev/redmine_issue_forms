@@ -196,6 +196,13 @@ module RedmineIssueForms
     # paragraph text - so only these tags hide placeholders.
     PRE_OPEN = /<(pre|code|kbd|notextile)\b[^>]*>/i
     PRE_CLOSE = %r{</(pre|code|kbd|notextile)>}i
+    # Either of the above, for one linear pass over a line (#mask_offtags).
+    OFFTAG = %r{<(/?)(pre|code|kbd|notextile)\b[^<>]*>}i
+
+    # A line RedCloth3 turns into a blockquote (its QUOTES_RE): it ends a
+    # list, like a blank line, and a comment line like it is a quote, not a
+    # value (see Form#value_line?).
+    QUOTE_LINE = /\A>/
 
     # Deeper list markers are not treated as list items: nobody writes a
     # form 20 levels deep, and it bounds the work per line.
@@ -348,6 +355,8 @@ module RedmineIssueForms
 
     def table_problem(table, rows)
       return Problem.new(:table_name_colon, table: table.name) if table.name.include?(':')
+      # Its comment lines would start with ">" - a quote, see QUOTE_LINE.
+      return Problem.new(:table_name_quote, table: table.name) if QUOTE_LINE.match?(table.name)
       return Problem.new(:table_rowspan, table: table.name) if rows.any? { |row| row.cells.any?(&:rowspan?) }
       return Problem.new(:table_header_colspan, table: table.name) if table.header.cells.any? { |cell| cell.span != 1 }
 
@@ -401,7 +410,7 @@ module RedmineIssueForms
         # isn't text at all). A non-bullet line right after an item is a
         # continuation of that item - rendered inside its <li> - so it
         # keeps the label path, and so do the bullets that follow it.
-        if line.strip.empty? || skipped?(index) || table_lines.include?(index)
+        if line.strip.empty? || skipped?(index) || table_lines.include?(index) || QUOTE_LINE.match?(line)
           labels = []
           item_auto_fields = []
           next
@@ -423,29 +432,48 @@ module RedmineIssueForms
           next # ordinary paragraph text: placeholders only count in lists
         end
 
-        collect_placeholders(text, offset, index, auto_key(labels), item_auto_fields)
+        collect_placeholders(Template.mask_offtags(text), offset, index, auto_key(labels), item_auto_fields)
       end
     end
 
     # Adds a Field for every placeholder in +text+ (which starts at column
     # +offset+ of line +line_index+). +auto_key+ is computed once per line
     # by the caller - every "{}" of an item gets the same one.
+    #
+    # The scan runs over the line's bytes (PLACEHOLDER is plain ASCII, so it
+    # matches a binary string the same way): MatchData#begin on a UTF-8
+    # string that isn't pure ASCII counts characters from the start of the
+    # string every time, which made a long Cyrillic line quadratic. Byte
+    # offsets are free, and the character offset the renderer needs is
+    # advanced by the length of the text between two matches only.
     def collect_placeholders(text, offset, line_index, auto_key, item_auto_fields)
-      text.to_enum(:scan, PLACEHOLDER).each do
+      bytes = text.b
+      byte_position = 0
+      char_position = 0
+      bytes.scan(PLACEHOLDER) do
         match = Regexp.last_match
-        key = placeholder_key(match[1])
+        content = match[1].dup.force_encoding(Encoding::UTF_8)
+        key = placeholder_key(content)
         next if key == :not_a_placeholder
 
+        start = match.begin(0)
+        char_position += bytes.byteslice(byte_position, start - byte_position).force_encoding(Encoding::UTF_8).length
+        byte_position = start
+        source = match[0].dup.force_encoding(Encoding::UTF_8)
         field = Field.new(
           key: key || auto_key, line_index: line_index,
-          start: offset + match.begin(0), length: match[0].length, source: match[0]
+          start: offset + char_position, length: source.length, source: source
         )
         @fields << field
         next unless key.nil?
 
         item_auto_fields << field
-        if item_auto_fields.size > 1
+        # Each field is marked once: re-marking all of them on every new
+        # "{}" was quadratic in their number.
+        if item_auto_fields.size == 2
           item_auto_fields.each { |f| f.problem = Problem.new(:several_auto_keys, key: f.key) }
+        elsif item_auto_fields.size > 2
+          field.problem = Problem.new(:several_auto_keys, key: field.key)
         end
       end
     end
@@ -466,7 +494,10 @@ module RedmineIssueForms
     # out first, so a colon inside a style ("%{color:red}Series%: {}") or a
     # link URL ("\"Doc\":https://wiki/x: {}") doesn't cut the label.
     def item_label(text)
-      plain = text.gsub(PLACEHOLDER) { |match| placeholder_key(Regexp.last_match(1)) == :not_a_placeholder ? match : '' }
+      # Only the head before the first ":" is used, and it is cut to
+      # MAX_LABEL_LENGTH anyway: the rest never needs cleaning.
+      plain = text[0, MAX_LABEL_LENGTH * 4]
+      plain = plain.gsub(PLACEHOLDER) { |match| placeholder_key(Regexp.last_match(1)) == :not_a_placeholder ? match : '' }
       plain = Template.strip_inline_markup(plain)
       head = plain.include?(':') ? plain.split(':', 2).first : plain
       Template.clean_label(head)
@@ -486,6 +517,10 @@ module RedmineIssueForms
           field.problem = Problem.new(:empty_key)
         elsif field.key.include?(':')
           field.problem = Problem.new(:key_colon, key: field.key)
+        elsif QUOTE_LINE.match?(field.key.strip)
+          # Its comment line would start with ">", which Redmine shows as
+          # a quote and Form doesn't read: the value could never show.
+          field.problem = Problem.new(:key_quote, key: field.key)
         end
       end
 
@@ -564,11 +599,56 @@ module RedmineIssueForms
     # ("text":url, "text(title)":url) become their text, styled spans
     # (%{color:red}text%) their text, style blocks after phrase modifiers
     # (*{color:red}bold*) and inline HTML tags (<code>) disappear.
+    #
+    # Only the tags RedCloth3 lets through (its OFFTAGS) are removed: any
+    # other "<...>" is shown as text ("R < 10 MOhm at U > 500 V"), so it is
+    # part of the label. The repetition in the %...% rule is possessive and
+    # the {...} rule can't backtrack over ":" - both were quadratic on
+    # long labels without Ruby 3.2's regex memoization.
     def self.strip_inline_markup(text)
-      text.gsub(/<[^<>]*>/, '')
+      text.gsub(%r{</?(?:pre|code|kbd|notextile)\b[^<>]*>}i, '')
           .gsub(/"([^"]+?)(?:\([^()]*\))?":(?:\S*[^\s:])/, '\\1')
-          .gsub(/%(?:\{[^{}]*\}|\([^()]*\)|\[[^\[\]]*\])+([^%]*)%/, '\\1')
-          .gsub(/\{[^{}]*[:;][^{}]*\}/, '')
+          .gsub(/%(?:\{[^{}]*\}|\([^()]*\)|\[[^\[\]]*\])++([^%]*)%/, '\\1')
+          .gsub(/\{[^{}:;]*[:;][^{}]*\}/, '')
+    end
+
+    # +text+ with every region that RedCloth3 leaves unformatted on this
+    # line - <pre>, <code>, <kbd> or <notextile> opened and closed on it -
+    # replaced by as many spaces, so a "{}" in there is not a field and
+    # the offsets of the ones outside stay valid. (Regions that span lines
+    # are skipped whole, see #code_line_indexes.) One pass over the tags;
+    # a region runs from an opening tag to the next closing tag of the
+    # same name. Works on bytes, like #collect_placeholders, and replaces
+    # each region by as many spaces as it has *characters*.
+    def self.mask_offtags(text)
+      return text unless text.include?('<')
+
+      bytes = text.b
+      regions = []
+      open_name = nil
+      open_start = nil
+      bytes.scan(OFFTAG) do
+        match = Regexp.last_match
+        name = match[2].downcase
+        if open_name.nil? && match[1].empty?
+          open_name = name
+          open_start = match.begin(0)
+        elsif open_name == name && !match[1].empty?
+          regions << [open_start, match.end(0)]
+          open_name = nil
+        end
+      end
+      return text if regions.empty?
+
+      masked = +''.b
+      position = 0
+      regions.each do |first, last|
+        masked << bytes.byteslice(position, first - position)
+        masked << (' ' * bytes.byteslice(first, last - first).force_encoding(Encoding::UTF_8).length)
+        position = last
+      end
+      masked << bytes.byteslice(position, bytes.bytesize - position)
+      masked.force_encoding(Encoding::UTF_8)
     end
   end
 end

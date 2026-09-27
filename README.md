@@ -50,8 +50,16 @@ separate permission.
   `Date received`.
 * `{Key}` gives the field an explicit key (`Resp`). Needed when an item
   has more than one field, and handy for keeping keys short.
-* Placeholders outside list items, inside `<pre>`, `bc.`, `notextile.`,
-  and `{{macros}}` are left alone.
+* Placeholders outside list items, inside `<pre>`, `<code>`, `<kbd>` and
+  `<notextile>` (on one line or across lines) and in quotes (`> ...`) are
+  left alone, and so are the double braces of `{{macros}}`. Redmine's
+  Textile has no `bc.` or `notextile.` blocks: a list after them is a
+  list, and its placeholders are fields.
+* A list, like in Textile, goes on until a blank line or a quote: a line
+  of text under an item belongs to that item, and the items after it are
+  still nested under the same parents.
+* A key or table name can't start with `>`: its comment line would be a
+  quote. The template problems (see below) point such keys out.
 
 The comment that fills a field:
 
@@ -92,7 +100,8 @@ Items : Checked by : 0 : Smith
 * Every line of every comment is read on its own; other text around it is
   fine. Quoted lines (`> ...`) are skipped.
 * The colon needs a space before it: `Key : value`, the way the plugin
-  itself writes it (`Key :value` at the end of a line works too).
+  itself writes it (`Key :` with nothing after it, at the end of a line,
+  clears the field).
   `Key: value` is ordinary prose, so a comment like "Result: all fine"
   never fills a field by accident. A value may contain colons
   (`Items : Time : 0 : 10:30`).
@@ -129,10 +138,11 @@ or a dash for empty fields.
 People who can fill the form also see, under it, mistakes in the template
 (duplicate keys, unsupported tables...) and, as *Values that don't fit the
 form*, comment lines that can't be placed: a cell that doesn't exist in a
-table, or a value whose field or table is no longer in the template (a
-label was renamed after the form was filled). For a key the template
-doesn't have, only comments made of nothing but `Key : value` lines count,
-so an everyday sentence with " : " in it isn't listed.
+table, or a value whose field or table an earlier version of the
+description had (a label was renamed after the form was filled; the
+issue history tells). A key the form never had is taken for ordinary
+prose and not listed. As with values, the latest line for a place wins,
+and `Key :` removes it from the list.
 
 ## Limits
 

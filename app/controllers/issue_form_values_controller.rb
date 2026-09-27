@@ -7,10 +7,15 @@ class IssueFormValuesController < ApplicationController
   # What the pencil and Cancel may name: an HTML id made by Keys.
   FIELD_ID = /\Aifv-\h{16}\z/
 
-  # The flash lives in Redmine's session cookie, which can't grow past
-  # 4 KB, so what is repeated back is kept short.
+  # The flash lives in Redmine's session cookie, and a cookie over 4 KB
+  # fails the response with CookieOverflow - after the comment has been
+  # saved. So what is repeated back is kept short: at most FLASH_ITEMS
+  # values of FLASH_VALUE_LENGTH characters, and the whole warning within
+  # FLASH_BYTES bytes once escaped (bytes: a Cyrillic letter takes two),
+  # which leaves room for the rest of the session.
   FLASH_ITEMS = 10
   FLASH_VALUE_LENGTH = 60
+  FLASH_BYTES = 1000
 
   before_action :find_form_issue
   before_action :authorize_form
@@ -99,18 +104,17 @@ class IssueFormValuesController < ApplicationController
 
     warnings = []
     if submission.conflicts.any?
-      fields = submission.conflicts.map do |target|
-        l(:text_issue_forms_typed, field: @form.target_label(target), value: quoted(submission.typed_value(target.id)))
-      end
+      fields = submission.conflicts.map { |target| rejected(submission, target.id, @form.target_label(target)) }
       warnings << l(:warning_issue_forms_conflict, fields: short_list(fields))
     end
     if submission.stale.any?
-      values = submission.stale.map { |id| quoted(submission.typed_value(id)) }
+      values = submission.stale.map { |id| rejected(submission, id) }
       warnings << l(:warning_issue_forms_stale, values: short_list(values))
     end
-    submission.full_tables.each do |table|
-      values = submission.rejected_row(table).map { |value| quoted(value) }
-      warnings << l(:warning_issue_forms_table_full, table: table.name, values: short_list(values))
+    if submission.full_tables.any?
+      values = submission.full_tables.flat_map { |table| submission.rejected_row(table) }.map { |value| quoted(value) }
+      warnings << l(:warning_issue_forms_table_full, tables: submission.full_tables.map(&:name).join(', '),
+                                                     values: short_list(values))
     end
 
     if submission.any?
@@ -120,7 +124,20 @@ class IssueFormValuesController < ApplicationController
       # close a value: nothing to report.
       flash[:notice] = l(:notice_issue_forms_nothing_to_save)
     end
-    flash[:warning] = warnings.map { |warning| ERB::Util.h(warning) }.join('<br>') if warnings.any?
+    flash[:warning] = fit_in_flash(warnings) if warnings.any?
+  end
+
+  # How a value that wasn't saved is repeated back: "Owner (you typed
+  # "Ann")", "Owner (you cleared it)" - or, for a field that is gone and
+  # has no name any more, just "Ann" or "clearing "Bob"".
+  def rejected(submission, id, label = nil)
+    typed = submission.typed_value(id)
+    original = submission.original_value(id)
+    if typed.empty? && original.present?
+      label ? l(:text_issue_forms_cleared, field: label.truncate(FLASH_VALUE_LENGTH)) : l(:text_issue_forms_cleared_value, value: quoted(original))
+    else
+      label ? l(:text_issue_forms_typed, field: label.truncate(FLASH_VALUE_LENGTH), value: quoted(typed)) : quoted(typed)
+    end
   end
 
   def quoted(value)
@@ -128,9 +145,28 @@ class IssueFormValuesController < ApplicationController
   end
 
   def short_list(items)
-    list = items.first(FLASH_ITEMS).map { |item| item.truncate(FLASH_VALUE_LENGTH * 2) }
+    list = items.first(FLASH_ITEMS)
     list << '...' if items.size > FLASH_ITEMS
     list.join(', ')
+  end
+
+  # The warnings, escaped and joined, in at most FLASH_BYTES bytes: each
+  # gets an equal share and is cut at its end, where the lists are.
+  def fit_in_flash(warnings)
+    share = FLASH_BYTES / warnings.size
+    warnings.map { |warning| escape_within(warning, share) }.join('<br>')
+  end
+
+  # +text+ escaped, cut short - before escaping, so no entity is ever cut
+  # in half - until it takes at most +bytes+ bytes.
+  def escape_within(text, bytes)
+    escaped = ERB::Util.h(text)
+    length = text.length
+    while escaped.bytesize > bytes && length > 3
+      length = [length - 1, length * bytes / escaped.bytesize].min
+      escaped = ERB::Util.h(text.truncate(length, omission: '...'))
+    end
+    escaped
   end
 
   def find_form_issue
