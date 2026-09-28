@@ -83,12 +83,14 @@
 
 /* An input with its check mark inside, at the right end: the span is the
    positioning box, the button sits over the input's right padding. In a
-   table only the last input of a row has a check mark (.issue-form-with-ok). */
+   table only the last input of a row has a check mark (.issue-form-with-ok).
+   In a list the field follows its key on the same line, so it is never
+   wider than half the line: on a phone 14em alone is about as wide as the
+   room left after a key, and the field would drop below it. */
 .wiki .issue-form-field {
   position: relative;
   display: inline-block;
-  width: 14em;
-  max-width: 100%;
+  width: min(14em, 50%);
   vertical-align: middle;
 }
 
@@ -190,13 +192,9 @@
   font-weight: bold;
 }
 
-/* Phones (Redmine's own responsive breakpoint): fields take the full
-   width of their line so a table stays within the screen. */
+/* Phones (Redmine's own responsive breakpoint): table fields may get
+   narrower, so a table stays within the screen. */
 @media screen and (max-width: 899px) {
-  .wiki .issue-form-field {
-    width: 100%;
-  }
-
   .wiki table .issue-form-field {
     min-width: 4em;
   }
