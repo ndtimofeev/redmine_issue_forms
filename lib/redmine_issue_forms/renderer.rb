@@ -61,7 +61,10 @@ module RedmineIssueForms
     # core rendering untouched.
     def render
       template = Template.parse(@issue.description)
-      return nil if template.empty?
+      # A description whose only table stopped being a form (see
+      # Template#plain_table?) is still rendered here for people who can
+      # fill it, so the values its comments gave that table are listed.
+      return nil if template.empty? && !(template.plain_tables? && interactive?)
 
       # The history is only searched if the orphans are shown (see
       # #notes_block), so a read-only rendering never pays for it.
@@ -437,8 +440,9 @@ module RedmineIssueForms
     # Submission). Wrapping the description instead of using per-row
     # <form> elements keeps the markup valid - a <form> can't sit inside a
     # <tr> - and needs no JavaScript at all. There is no separate "save
-    # all" button at the bottom: every input has its own check mark, and
-    # any of them, or Enter, saves everything.
+    # all" button at the bottom: every list field and every table row has
+    # a check mark (see #row_buttons), and any of them, or Enter, saves
+    # everything.
     def wrap_in_form(html)
       footer = view.safe_join(template.form_tables.map do |table|
         view.hidden_field_tag("issue_form[layouts][#{Keys.table_id(table.name)}]", form.layout(table), id: nil)

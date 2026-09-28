@@ -51,7 +51,7 @@ module RedmineIssueForms
     # too, and a needless reload for a private one is harmless.
     def self.form_comment?(issue, journal)
       template = Template.parse(issue.description)
-      return false if template.empty?
+      return false if template.empty? && !template.plain_tables?
 
       texts = [journal.notes_before_last_save, journal.notes_in_database, journal.notes].compact.uniq
       former_names = ->(names) { Form.former_names_for(issue, names) }

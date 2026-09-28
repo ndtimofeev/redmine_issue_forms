@@ -46,3 +46,4 @@ en:
   text_issue_forms_orphan_row_limit: "past the row limit"
   text_issue_forms_orphan_unknown_key: "the form has no such field (renamed or removed?)"
   text_issue_forms_orphan_unknown_table: "the form has no such table (renamed or removed?)"
+  text_issue_forms_orphan_table_not_a_form: "this table has nothing to fill any more: no empty cell, no row for adding rows"

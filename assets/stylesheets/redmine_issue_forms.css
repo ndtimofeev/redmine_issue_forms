@@ -18,6 +18,12 @@
   outline: none;
 }
 
+/* The same while the input's check mark has keyboard focus. A rule of its
+   own: a browser without :has() drops the whole rule it appears in. */
+.wiki .issue-form-with-ok:has(> button.issue-form-ok:focus-visible) > .issue-form-input {
+  border: 1px solid #5ad;
+}
+
 /* The pencil and Cancel are submit buttons (so they save what was typed,
    see Renderer#edit_button) drawn like the links they used to be. */
 .wiki button.issue-form-edit,
@@ -105,7 +111,10 @@
    top/bottom and stick out below the 24px input; height: auto lets the
    offsets decide. 2px: the input's 1px margin plus its 1px border, so the
    button stays inside the border. No background in any state: hover and
-   focus show on the mark itself (below). */
+   focus show on the mark itself (below), and keyboard focus also lights
+   up the input's border, as when typing in it (above). The transparent
+   outline is for forced-colors mode (Windows High Contrast), which draws
+   it in the system colour, inside the input. */
 .wiki .issue-form-field button.issue-form-ok {
   position: absolute;
   top: 2px;
@@ -119,7 +128,8 @@
   border-radius: 0;
   background: transparent;
   box-shadow: none;
-  outline: none;
+  outline: 2px solid transparent;
+  outline-offset: -2px;
   cursor: pointer;
 }
 

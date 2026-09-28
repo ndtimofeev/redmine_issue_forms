@@ -122,6 +122,55 @@ class RedmineIssueForms::IssuesShowTest < Redmine::ControllerTest
     end
   end
 
+  test 'an empty tail adds no empty row in a read-only view either' do
+    @issue.update_columns(description: "*T*\n\n|_. Item |_. Qty |\n| Bolt |  |\n|\\2. |\n")
+    Role.anonymous.remove_permission!(:add_issue_notes)
+    get :show, params: { id: @issue.id } # anonymous: can see, can't fill
+    assert_select '#issue_description_wiki' do
+      assert_select 'input', 0
+      assert_select 'td[colspan]', 0
+      assert_select 'tr', 2
+    end
+  end
+
+  test 'headers with Textile attributes are made unsortable too' do
+    @issue.update_columns(description: "*T*\n\n|_(cls). Item |_<.Qty|_{color:red}. [en]Note |\n| Bolt |  | x |\n")
+    @request.session[:user_id] = 2
+    get :show, params: { id: @issue.id }
+    assert_select '#issue_description_wiki th', 3
+    assert_select '#issue_description_wiki th.no-sort[data-sort-method=none]', 3
+    assert_select '#issue_description_wiki th.no-sort.wiki-class-cls', text: 'Item'
+    assert_select '#issue_description_wiki th[style].no-sort', 2
+    assert_no_match(/ifm\h+hz/, response.body)
+  end
+
+  test 'a value opened with the pencil in a table row' do
+    @issue.update_columns(description: "*T*\n\n|_. A |_. B |_. C |\n| 1 |  |  |\n| 2 |  | x |\n")
+    add_note(@issue, "T : B : 0 : bee\nT : B : 1 : bee")
+    @request.session[:user_id] = 2
+    # the row's check mark stays in its last input, the opened one gets Cancel
+    get :show, params: { id: @issue.id, issue_form_edit: Keys.cell_id('T', 'B', 0) }
+    assert_select "span.issue-form-field:not(.issue-form-with-ok) > input##{Keys.cell_id('T', 'B', 0)}[value=bee]"
+    assert_select "span.issue-form-with-ok > input##{Keys.cell_id('T', 'C', 0)}"
+    assert_select 'button.issue-form-cancel[value=?]', Keys.cell_id('T', 'B', 0)
+    # the opened input is the row's only one: it has the check mark
+    get :show, params: { id: @issue.id, issue_form_edit: Keys.cell_id('T', 'B', 1) }
+    assert_select "span.issue-form-with-ok > input##{Keys.cell_id('T', 'B', 1)}[value=bee]"
+  end
+
+  test 'values of a table that has nothing to fill any more are listed' do
+    @issue.update_columns(description: "*Items*\n\n|_. Item |_. Qty |\n|\\2. Add items |\n")
+    add_note(@issue, "Items : Item : 0 : Bolt\nItems : Qty : 0 : 5")
+    @issue.init_journal(User.find(1))
+    @issue.update!(description: "*Items*\n\n|_. Item |_. Qty |\n| Nut | 7 |\n") # the tail removed
+    @request.session[:user_id] = 2
+    get :show, params: { id: @issue.id }
+    assert_select '#issue_description_wiki td', text: 'Nut'
+    assert_select '#issue_description_wiki th.no-sort', 0 # an ordinary table now
+    assert_select '.issue-form-orphans li', 2
+    assert_select '.issue-form-orphans li', text: /Items : Item : 0 : Bolt.*nothing to fill/
+  end
+
   test 'a table row with several inputs has one check mark, in the last one' do
     @issue.update_columns(description: "*T*\n\n|_. A |_. B |_. C |\n| x |  |  |\n|  | y |  |\n|  |  | z |\n")
     add_note(@issue, 'T : C : 0 : done')
@@ -138,7 +187,7 @@ class RedmineIssueForms::IssuesShowTest < Redmine::ControllerTest
   end
 
   test 'a named table with nothing to fill is an ordinary, sortable table' do
-    @issue.update_columns(description: "*Specs*\n\n|_. Name |_. Value |\n| Weight | 5 kg |\n\n* Name: {}\n")
+    @issue.update_columns(description: "*Specs*\n\n|_. Name |_. Value |\n| Weight | 5 kg |\n| Length | 2 m |\n\n* Name: {}\n")
     add_note(@issue, 'Specs : Value : 0 : 6 kg')
     @request.session[:user_id] = 2
     get :show, params: { id: @issue.id }

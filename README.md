@@ -145,7 +145,9 @@ People who can fill the form also see, under it, mistakes in the template
 form*, comment lines that can't be placed: a cell that doesn't exist in a
 table, or a value whose field or table an earlier version of the
 description had (a label was renamed after the form was filled; the
-issue history tells, however long ago it was). A key the form never had is taken for ordinary
+issue history tells, however long ago it was). The same goes for a table
+that was a form and no longer is, because its last empty cell was filled
+in the description or its tail removed. A key the form never had is taken for ordinary
 prose and not listed. As with values, the latest line for a place wins,
 and `Key :` removes it from the list.
 

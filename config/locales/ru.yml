@@ -46,3 +46,4 @@ ru:
   text_issue_forms_orphan_row_limit: "за пределом числа строк"
   text_issue_forms_orphan_unknown_key: "в форме нет такого поля (переименовали или удалили?)"
   text_issue_forms_orphan_unknown_table: "в форме нет такой таблицы (переименовали или удалили?)"
+  text_issue_forms_orphan_table_not_a_form: "в этой таблице больше нечего заполнять: нет ни пустых ячеек, ни строки для добавления"

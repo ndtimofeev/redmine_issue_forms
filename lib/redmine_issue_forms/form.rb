@@ -328,9 +328,12 @@ module RedmineIssueForms
         store(@field_values, field.normalized_key, value.strip, journal_id)
       elsif parts.size == 4 && parts[2].match?(CELL_ROW)
         # Maybe a cell of a table the template had before it was renamed or
-        # removed: the history decides, if it's ever asked.
+        # removed, or before its last empty cell was filled in the
+        # template (or its tail removed), which made it an ordinary table:
+        # the history decides, if it's ever asked.
         address = [:cell, *parts[0..2].map { |part| Keys.normalize(part) }]
-        add_candidate(address, address[1], parts[3], line, journal_id, :unknown_table)
+        reason = template.plain_table?(parts[0]) ? :table_not_a_form : :unknown_table
+        add_candidate(address, address[1], parts[3], line, journal_id, reason)
       else
         # Maybe a value of a key an earlier template had - or just prose.
         name = Keys.normalize(key)

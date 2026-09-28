@@ -114,6 +114,14 @@ class RedmineIssueForms::FormTest < ActiveSupport::TestCase
     assert_equal [Set['old', 'remarque']], calls
   end
 
+  test 'values of a table that has nothing to fill any more say so' do
+    template = RedmineIssueForms::Template.parse("*Items*\n\n|_. Item |_. Qty |\n| Nut | 7 |\n")
+    assert template.plain_table?('items')
+    f = RedmineIssueForms::Form.new(template, [[1, "Items : Item : 0 : Bolt\nGone : Qty : 0 : 1"]],
+                                    former_names: ->(_names) { Set['items', 'gone'] })
+    assert_equal [:table_not_a_form, :unknown_table], f.orphans.map(&:reason)
+  end
+
   test 'only the most recent names are asked about' do
     notes = (1..60).map { |i| [i, "Word#{i} : text"] }
     asked = nil

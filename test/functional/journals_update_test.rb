@@ -39,6 +39,15 @@ class RedmineIssueForms::JournalsUpdateTest < Redmine::ControllerTest
     assert_includes response.body, 'window.location.reload()'
   end
 
+  test 'a value of a table that stopped being a form reloads too' do
+    @issue.update_columns(description: "*Items*\n\n|_. Item |_. Qty |\n|\\2. Add items |\n")
+    journal = add_note(@issue, 'Items : Item : 0 : Bolt')
+    @issue.init_journal(User.find(1))
+    @issue.update!(description: "*Items*\n\n|_. Item |_. Qty |\n| Nut | 7 |\n")
+    edit_note(journal, 'Items : Item : 0 : Nut')
+    assert_includes response.body, 'window.location.reload()'
+  end
+
   test 'an unrelated comment leaves the page alone' do
     edit_note(add_note(@issue, 'Looks good'), 'Looks good to me')
     assert_not_includes response.body, 'reload'

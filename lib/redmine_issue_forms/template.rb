@@ -232,6 +232,7 @@ module RedmineIssueForms
       @lines = text.to_s.split(/\r?\n/, -1)
       @fields = []
       @tables = []
+      @plain_table_names = Set.new
       @skipped = code_line_indexes
       parse_tables
       parse_fields
@@ -252,6 +253,18 @@ module RedmineIssueForms
 
     def empty?
       fields.empty? && tables.empty?
+    end
+
+    # Whether +name+ is a named table with a header but nothing to fill
+    # (see #build_table): an ordinary table now, but maybe a form table in
+    # an earlier version of the description - then Form lists the values
+    # its comments gave it, rather than letting them disappear.
+    def plain_table?(name)
+      @plain_table_names.include?(Keys.normalize(name))
+    end
+
+    def plain_tables?
+      @plain_table_names.any?
     end
 
     def table_named(name)
@@ -342,7 +355,10 @@ module RedmineIssueForms
         end
       end
 
-      return nil unless tail || body.any? { |row| row.cells.any?(&:input?) }
+      unless tail || body.any? { |row| row.cells.any?(&:input?) }
+        @plain_table_names << Keys.normalize(name)
+        return nil
+      end
 
       table = Table.new(
         name: name, columns: columns, header: header, rows: body, tail: tail,
