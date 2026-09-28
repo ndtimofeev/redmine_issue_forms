@@ -59,10 +59,17 @@ class RedmineIssueForms::IssuesShowTest < Redmine::ControllerTest
       assert_select "input##{Keys.new_cell_id('T', 'Item')}"
       assert_select 'button.issue-form-add-row'
       assert_select 'td[colspan="2"]', text: /Add rows below/
-      # the tail and the new row stay put when the table is sorted
-      assert_select 'tr[data-sort-method=none]', 2
-      assert_select 'tr[data-sort-method=none] td[colspan="2"]', text: 'Add rows below'
-      assert_select "tr[data-sort-method=none] input##{Keys.new_cell_id('T', 'Item')}"
+      # a form table can't be sorted: its rows are addressed by number
+      assert_select 'th', 2
+      assert_select 'th.no-sort[data-sort-method=none]', 2
+      assert_select 'th', text: 'Qty'
+      assert_no_match(/ifm\h+hz/, response.body)
+      # one check mark per table row, in its last input
+      assert_select 'tr' do |rows|
+        new_row = rows.find { |row| row.at_css("##{Keys.new_cell_id('T', 'Item')}") }
+        assert_equal 1, new_row.css('button.issue-form-ok').size
+        assert new_row.at_css("##{Keys.new_cell_id('T', 'Qty')} + button.issue-form-add-row")
+      end
       assert_select 'input[type=hidden][name=?]', "issue_form[layouts][#{Keys.table_id('T')}]" do |inputs|
         assert_match(/\A\h{16}\z/, inputs.first['value'])
       end
@@ -75,6 +82,7 @@ class RedmineIssueForms::IssuesShowTest < Redmine::ControllerTest
     @request.session[:user_id] = 2
     get :show, params: { id: @issue.id }
     assert_select 'input.issue-form-input', 5 # 2 fields, 1 cell, 2 in the new row
+    assert_select 'button.issue-form-ok', 4 # each field, the cell's row, the new row
     assert_select 'input.issue-form-input[type]', 0
   end
 
@@ -100,7 +108,45 @@ class RedmineIssueForms::IssuesShowTest < Redmine::ControllerTest
     @request.session[:user_id] = 2
     get :show, params: { id: @issue.id }
     assert_select "input##{Keys.new_cell_id('T', 'Item')}", 0
-    assert_select 'tr[data-sort-method=none] td[colspan="2"] em', text: /200/
+    assert_select 'td[colspan="2"] em', text: /200/
+  end
+
+  test 'an empty tail adds no empty row above the new row' do
+    @issue.update_columns(description: "*T*\n\n|_. Item |_. Qty |\n| Bolt |  |\n|\\2. |\n")
+    @request.session[:user_id] = 2
+    get :show, params: { id: @issue.id }
+    assert_select '#issue_description_wiki' do
+      assert_select 'td[colspan="2"]', 0
+      assert_select 'tr', 3 # header, Bolt, new row
+      assert_select "input##{Keys.new_cell_id('T', 'Item')}"
+    end
+  end
+
+  test 'a table row with several inputs has one check mark, in the last one' do
+    @issue.update_columns(description: "*T*\n\n|_. A |_. B |_. C |\n| x |  |  |\n|  | y |  |\n|  |  | z |\n")
+    add_note(@issue, 'T : C : 0 : done')
+    @request.session[:user_id] = 2
+    get :show, params: { id: @issue.id }
+    # row 0: only B is an input (C is filled); row 1: A and C; row 2: A and B
+    [[0, 'B', %w[]], [1, 'C', %w[A]], [2, 'B', %w[A]]].each do |row, with_ok, without_ok|
+      assert_select "span.issue-form-with-ok > input##{Keys.cell_id('T', with_ok, row)} + button.issue-form-save"
+      without_ok.each do |column|
+        assert_select "span.issue-form-field:not(.issue-form-with-ok) > input##{Keys.cell_id('T', column, row)}"
+      end
+    end
+    assert_select 'button.issue-form-ok', 3
+  end
+
+  test 'a named table with nothing to fill is an ordinary, sortable table' do
+    @issue.update_columns(description: "*Specs*\n\n|_. Name |_. Value |\n| Weight | 5 kg |\n\n* Name: {}\n")
+    add_note(@issue, 'Specs : Value : 0 : 6 kg')
+    @request.session[:user_id] = 2
+    get :show, params: { id: @issue.id }
+    assert_select 'th.no-sort', 0
+    assert_select 'th[data-sort-method]', 0
+    assert_select 'td', text: '5 kg'
+    assert_select '.issue-form-problems', 0
+    assert_select '.issue-form-orphans', 0
   end
 
   test 'the form carries the CSRF token' do

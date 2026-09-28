@@ -314,8 +314,10 @@ module RedmineIssueForms
     end
 
     # Returns nil for an ordinary (non-form) table: one without a bold
-    # name above it, or whose first row isn't a header row. Such tables
-    # are none of our business and are not even reported as problems.
+    # name above it, whose first row isn't a header row, or with nothing
+    # to fill - no empty cell and no tail. Such tables are none of our
+    # business: core renders them as they are (sortable, like any wiki
+    # table with a header), and they are not even reported as problems.
     def build_table(first, last)
       name = table_name_above(first)
       return nil unless name
@@ -339,6 +341,8 @@ module RedmineIssueForms
           body = body[0...-1]
         end
       end
+
+      return nil unless tail || body.any? { |row| row.cells.any?(&:input?) }
 
       table = Table.new(
         name: name, columns: columns, header: header, rows: body, tail: tail,

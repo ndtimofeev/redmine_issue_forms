@@ -113,14 +113,15 @@ module RedmineIssueForms
       "ifm#{@nonce}n#{@markers.size - 1}z"
     end
 
-    # Put in the first cell of a table row that must stay where it is when
-    # someone sorts the table by clicking a column header: the tail and the
-    # blank new row. Core makes every wiki table with a header row sortable
+    # Put at the start of every header cell of a form table, to make its
+    # column unsortable (see #unsortable_headers). Core makes every wiki
+    # table with a header row sortable by clicking a column header
     # (setupWikiTableSortableHeader in application.js, using Tablesort),
-    # and Tablesort leaves alone only rows marked data-sort-method="none".
-    # See #pin_rows.
-    def row_pin
-      "ifm#{@nonce}pz"
+    # but a form table's cells are addressed by row number: sorted, its
+    # rows would no longer be where their comments say, and the blank new
+    # row would end up somewhere in the middle.
+    def header_pin
+      "ifm#{@nonce}hz"
     end
 
     # Swaps markers for our HTML, in one pass per step so nothing inserted
@@ -140,7 +141,7 @@ module RedmineIssueForms
     # the caught markers, wherever their other copies are; the second
     # swaps every marker.
     def substitute_markers(html)
-      html = pin_rows(html)
+      html = unsortable_headers(html)
       marker = /ifm#{@nonce}n(\d+)z/
       token = /<[^>]*>|#{marker}/
 
@@ -174,13 +175,23 @@ module RedmineIssueForms
       end
     end
 
-    # Marks the <tr> around every #row_pin as not sortable and drops the
-    # pin itself. RedCloth writes form table rows as a bare "<tr>" (a row
-    # attribute would stop the plugin from seeing the line as a table row
-    # at all, see Template::TABLE_ROW), so only that exact tag is looked for.
-    def pin_rows(html)
-      pin = row_pin
-      html = html.gsub(%r{<tr>(?=(?:(?!</tr>).)*?#{pin})}m, '<tr data-sort-method="none">')
+    # Every <th> that starts with a #header_pin gets what Tablesort and
+    # core's stylesheet need to leave its column alone:
+    # data-sort-method="none" (no click handler) and the class "no-sort"
+    # (no pointer cursor, no sort arrow). The pins themselves are dropped,
+    # wherever they ended up.
+    def unsortable_headers(html)
+      pin = header_pin
+      html = html.gsub(/<th([^>]*)>[[:blank:]]*#{pin}[[:blank:]]*/) do
+        attributes = Regexp.last_match(1)
+        attributes =
+          if attributes.match?(/\bclass="/)
+            attributes.sub(/\bclass="/, 'class="no-sort ')
+          else
+            "#{attributes} class=\"no-sort\""
+          end
+        "<th#{attributes} data-sort-method=\"none\">"
+      end
       html.gsub(/[[:blank:]]*#{pin}[[:blank:]]*/, '')
     end
 
@@ -205,7 +216,8 @@ module RedmineIssueForms
     end
 
     def table_source(table)
-      rows = [template.lines[table.header.line_index]]
+      header = table.header.cells
+      rows = [row_line(header.map(&:prefix), header.map { |cell| "#{header_pin} #{cell.content}" })]
 
       form.row_count(table).times do |row|
         rows <<
@@ -216,17 +228,12 @@ module RedmineIssueForms
           end
       end
 
-      rows << tail_source(table) if table.tail
+      # An empty tail would be an empty row right above the new row.
+      rows << template.lines[table.tail.line_index] if table.tail? && !table.tail.cells.first.content.empty?
       if interactive? && table.tail?
         rows << (form.can_add_row?(table) ? new_row_source(table) : full_row_source(table))
       end
       rows.join("\n")
-    end
-
-    # The tail row as written, pinned in place (see #row_pin).
-    def tail_source(table)
-      cells = table.tail.cells
-      row_line(cells.map(&:prefix), ["#{row_pin} #{cells.first.content}"])
     end
 
     # A row of the template: static cells keep their text, empty ones get
@@ -234,31 +241,42 @@ module RedmineIssueForms
     def template_row_source(table, row, row_index)
       return template.lines[row.line_index] if row.cells.none?(&:input?)
 
-      contents = row.cells.map do |cell|
+      targets = row.cells.map { |cell| form.cell_target(table, cell.column, row_index) if cell.input? }
+      buttons = row_buttons(targets)
+      contents = row.cells.each_with_index.map do |cell, index|
         next cell.content unless cell.input?
 
-        cell_marker(form.cell_target(table, cell.column, row_index))
+        cell_marker(targets[index], button: buttons[index])
       end
       row_line(row.cells.map(&:prefix), contents)
     end
 
     # A row that exists only because comments wrote to it.
     def extra_row_source(table, row_index)
-      contents = table.columns.each_index.map do |column|
-        cell_marker(form.cell_target(table, column, row_index))
-      end
+      targets = table.columns.each_index.map { |column| form.cell_target(table, column, row_index) }
+      buttons = row_buttons(targets)
+      contents = targets.each_with_index.map { |target, index| cell_marker(target, button: buttons[index]) }
       row_line([''] * contents.size, contents)
     end
 
+    # One check mark per table row, in the last input of the row: several
+    # in a row read as if each saved only its own cell, while every one of
+    # them saves the whole form anyway (as does Enter in any input).
+    # Returns the button for each of +targets+ (nil for a static cell, or
+    # an input without the check mark).
+    def row_buttons(targets)
+      last = targets.rindex { |target| target && shows_input?(target) }
+      targets.each_index.map { |index| index == last ? save_button : nil }
+    end
+
     # The blank row under the tail; saving it creates the next row. Its
-    # check marks are titled "Add row" rather than "Save".
+    # check mark is titled "Add row" rather than "Save".
     def new_row_source(table)
-      contents = table.columns.map do |column_name|
+      contents = table.columns.each_with_index.map do |column_name, column|
         id = Keys.new_cell_id(table.name, column_name)
-        marker(input_tag(id, nil, label: "#{table.name} : #{column_name}", placeholder: column_name,
-                                  button: add_row_button))
+        button = column == table.columns.size - 1 ? add_row_button : nil
+        marker(input_tag(id, nil, label: "#{table.name} : #{column_name}", placeholder: column_name, button: button))
       end
-      contents[0] = "#{row_pin} #{contents[0]}"
       row_line([''] * contents.size, contents)
     end
 
@@ -266,11 +284,11 @@ module RedmineIssueForms
     # have, so the tail's invitation to add rows isn't left unexplained.
     def full_row_source(table)
       note = view.content_tag(:em, l(:text_issue_forms_table_full, count: form.row_limit(table)))
-      "|\\#{table.columns.size}. #{row_pin} #{marker(note)} |"
+      "|\\#{table.columns.size}. #{marker(note)} |"
     end
 
-    def cell_marker(target)
-      marker(cell_html(target), form.value_for(target)&.value, label: form.target_label(target))
+    def cell_marker(target, button:)
+      marker(cell_html(target, button: button), form.value_for(target)&.value, label: form.target_label(target))
     end
 
     def plain_for_field(field)
@@ -302,11 +320,18 @@ module RedmineIssueForms
       end
     end
 
-    def cell_html(target)
+    # Whether +target+ is shown as an input: empty, or opened with the
+    # pencil, to someone who can fill the form.
+    def shows_input?(target)
+      interactive? && (form.value_for(target).nil? || editing_id == target.id)
+    end
+
+    def cell_html(target, button:)
       entry = form.value_for(target)
       label = form.target_label(target)
-      if interactive? && (entry.nil? || editing_id == target.id)
-        input_tag(target.id, entry&.value, label: label, edited: entry.present?) + cancel_button(target.id, entry)
+      if shows_input?(target)
+        input_tag(target.id, entry&.value, label: label, edited: entry.present?, button: button) +
+          cancel_button(target.id, entry)
       elsif entry
         value_html(target.id, entry.value)
       else
@@ -323,8 +348,9 @@ module RedmineIssueForms
     # An input with its check mark button drawn inside it, at the right
     # end (see .issue-form-field in the stylesheet): a wrapper span is the
     # positioning box, the input leaves room on its right for the button.
-    # Every input gets its own check mark, in tables too, so the button is
-    # always right where the person was typing.
+    # Every list field gets its own check mark; a table row gets one, in
+    # its last input (see #row_buttons), and the other inputs of the row
+    # get +button+ nil.
     def input_tag(id, value, label:, edited: false, placeholder: nil, button: save_button)
       @has_controls = true
       # No type attribute - still a text input, but not one core's
@@ -337,12 +363,12 @@ module RedmineIssueForms
         # The pencil lands on this input: put the cursor in it.
         autofocus: edited && editing_id == id
       )
-      html += button
+      html += button if button
       # Marks the input as opened with the pencil, and remembers what it
       # showed: only such inputs may overwrite or clear an existing value,
       # and only if nobody changed it meanwhile (see Submission).
       html += view.hidden_field_tag("issue_form[original][#{id}]", value, id: nil) if edited
-      view.content_tag(:span, html, class: 'issue-form-field')
+      view.content_tag(:span, html, class: button ? 'issue-form-field issue-form-with-ok' : 'issue-form-field')
     end
 
     def save_button

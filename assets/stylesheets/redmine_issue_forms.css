@@ -76,7 +76,8 @@
 }
 
 /* An input with its check mark inside, at the right end: the span is the
-   positioning box, the button sits over the input's right padding. */
+   positioning box, the button sits over the input's right padding. In a
+   table only the last input of a row has a check mark (.issue-form-with-ok). */
 .wiki .issue-form-field {
   position: relative;
   display: inline-block;
@@ -94,13 +95,17 @@
 .wiki .issue-form-field .issue-form-input {
   width: 100%;
   box-sizing: border-box;
+}
+
+.wiki .issue-form-with-ok .issue-form-input {
   padding-right: 2em;
 }
 
 /* Core gives submit buttons a fixed 28px height, which would win over
    top/bottom and stick out below the 24px input; height: auto lets the
    offsets decide. 2px: the input's 1px margin plus its 1px border, so the
-   hover background stays inside the border. */
+   button stays inside the border. No background in any state: hover and
+   focus show on the mark itself (below). */
 .wiki .issue-form-field button.issue-form-ok {
   position: absolute;
   top: 2px;
@@ -111,27 +116,38 @@
   margin: 0;
   padding: 0;
   border: 0;
-  border-radius: 0 2px 2px 0;
+  border-radius: 0;
   background: transparent;
   box-shadow: none;
+  outline: none;
   cursor: pointer;
 }
 
 .wiki .issue-form-ok-mark {
+  display: inline-block;
   color: #2e9e3f;
   font-size: 1.15em;
   font-weight: bold;
   line-height: 1;
+  transition: transform 0.12s ease-out, color 0.12s ease-out;
 }
 
-.wiki .issue-form-field button.issue-form-ok:hover,
-.wiki .issue-form-field button.issue-form-ok:focus {
-  background: #e8f5ea;
-}
-
+/* Pointing at the check mark, or reaching it with Tab, makes it bigger and
+   darker; pressing it, smaller. */
 .wiki .issue-form-field button.issue-form-ok:hover .issue-form-ok-mark,
-.wiki .issue-form-field button.issue-form-ok:focus .issue-form-ok-mark {
+.wiki .issue-form-field button.issue-form-ok:focus-visible .issue-form-ok-mark {
   color: #1f7a2e;
+  transform: scale(1.3);
+}
+
+.wiki .issue-form-field button.issue-form-ok:active .issue-form-ok-mark {
+  transform: scale(0.9);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wiki .issue-form-ok-mark {
+    transition: none;
+  }
 }
 
 .wiki .issue-form-cancel {

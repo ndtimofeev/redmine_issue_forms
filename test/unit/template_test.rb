@@ -175,19 +175,27 @@ class RedmineIssueForms::TemplateTest < ActiveSupport::TestCase
   test 'table problems' do
     assert_equal :table_rowspan, parse("*T*\n|_. A |_. B |\n|/2. x | |\n| |\n").tables.first.problem.code
     assert_equal :table_header_colspan, parse("*T*\n|_\\2. A |\n| | |\n").tables.first.problem.code
-    assert_equal :table_duplicate_column, parse("*T*\n|_. A |_. a |\n").tables.first.problem.code
+    assert_equal :table_duplicate_column, parse("*T*\n|_. A |_. a |\n| | |\n").tables.first.problem.code
     assert_equal :table_row_width, parse("*T*\n|_. A |_. B |_. C |\n| | |\n| | | |\n").tables.first.problem.code
-    assert_equal :table_name_colon, parse("*T: 1*\n|_. A |_. B |\n").tables.first.problem.code
-    assert_equal :table_column_colon, parse("*T*\n|_. A: 1 |_. B |\n").tables.first.problem.code
+    assert_equal :table_name_colon, parse("*T: 1*\n|_. A |_. B |\n| | |\n").tables.first.problem.code
+    assert_equal :table_column_colon, parse("*T*\n|_. A: 1 |_. B |\n|\\2. more |\n").tables.first.problem.code
+  end
+
+  test 'a named table with nothing to fill is not a form' do
+    assert_empty parse("*Specs*\n\n|_. Name |_. Value |\n| Weight | 5 kg |\n").tables
+    assert_empty parse("*Specs*\n\n|_. Name |_. Value |\n").tables
+    # not even with a problem that a form table would have
+    assert_empty parse("*Specs*\n\n|_. Name |_. Value |\n|/2. Weight | 5 kg |\n| 6 kg |\n").tables
+    assert_equal 1, parse("*Specs*\n\n|_. Name |_. Value |\n|\\2. |\n").form_tables.size # a tail is enough
   end
 
   test 'a list key equal to a table name is a problem' do
-    template = parse("* Acceptance {}\n\n*Acceptance*\n\n|_. A |_. B |\n")
+    template = parse("* Acceptance {}\n\n*Acceptance*\n\n|_. A |_. B |\n| | |\n")
     assert_equal :key_is_table_name, template.fields.first.problem.code
   end
 
   test 'duplicate table names are a problem' do
-    template = parse("*T*\n|_. A |\n\n*T*\n|_. B |\n")
+    template = parse("*T*\n|_. A |\n| |\n\n*T*\n|_. B |\n| |\n")
     assert_equal [:duplicate_table, :duplicate_table], template.tables.map { |t| t.problem&.code }
     assert_empty template.form_tables
   end

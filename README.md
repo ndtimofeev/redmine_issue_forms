@@ -79,15 +79,19 @@ Supplier_Name : ACME Ltd
 ```
 
 * A table is a form when a paragraph of nothing but bold text (`*Items*`
-  or `**Items**`) stands right above it and its first row is a header
-  (`|_. ...|`). The bold text is the table name, the header cells are the
-  column names.
+  or `**Items**`) stands right above it, its first row is a header
+  (`|_. ...|`) and it has something to fill: an empty cell or a tail (see
+  below). The bold text is the table name, the header cells are the column
+  names. Any other table is an ordinary table, left exactly as Redmine
+  shows it.
 * Data rows are numbered from **0**, the header not counted.
 * An empty cell is an input; a cell with text is fixed.
 * A last row that is one cell spanning the whole table (`|\3. ...|`) is
-  the table's *tail*. Its text is shown as a hint, and below it a blank
-  row lets people add rows. Without a tail the
-  table has a fixed number of rows.
+  the table's *tail*. Its text is shown as a hint (an empty tail, `|\3. |`,
+  shows nothing), and below it a blank row lets people add rows. Without a
+  tail the table has a fixed number of rows.
+* A form table can't be sorted by clicking its column headers, as other
+  wiki tables with a header can: its rows are addressed by number.
 
 The comment that fills a cell:
 
@@ -113,8 +117,9 @@ Items : Checked by : 0 : Smith
 ## Filling a form
 
 * Empty fields are drawn as inputs with a green check mark at their right
-  end, inside the input. Every check mark, and Enter, saves *everything*
-  typed in the form, as one comment.
+  end, inside the input; a table row has one check mark, in its last
+  input. Every check mark, and Enter, saves *everything* typed in the
+  form, as one comment.
 * A filled value has a pencil. It saves whatever was typed elsewhere in
   the form and opens the value in an input; saving it empty clears the
   value. *Cancel* closes it unchanged.
